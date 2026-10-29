@@ -59,7 +59,9 @@ stream::VadPostprocessParams FireRedVad::default_params(bool stream_variant, Vad
     // so the split is out of reach there.
     params.max_speech_frame = use == VadUse::streaming ? std::numeric_limits<int>::max() : 2000;
     params.min_silence_frame = 20;
-    params.merge_silence_frame = 0;
+    // Gaps under 500 ms are filled, so a comma pause does not split a sentence into separate
+    // decodes. The upstream README uses 0.
+    params.merge_silence_frame = 50;
     params.extend_speech_frame = 0;
     return params;
 }

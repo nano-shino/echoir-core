@@ -130,8 +130,13 @@ TEST_CASE("firered VAD finds the speech in jfk.wav") {
             CHECK(ranges[i - 1].end_ms <= ranges[i].start_ms);
         }
         CHECK(total_ms(ranges) > 7000);
-        // Exact to the 10 ms frame against upstream.
-        CHECK(same_ranges(ranges, std::vector<ev::Range>(v.jfk.begin(), v.jfk.end())));
+        // Exact to the 10 ms frame against upstream, which merges no gaps. The defaults merge
+        // them, so the upstream settings are the defaults with merge_silence_frame 0.
+        es::VadPostprocessParams upstream = ev::FireRedVad::default_params(v.stream);
+        upstream.merge_silence_frame = 0;
+        ev::FireRedVad upstream_vad(*model, upstream);
+        CHECK(same_ranges(upstream_vad.detect(pcm),
+                          std::vector<ev::Range>(v.jfk.begin(), v.jfk.end())));
     });
 }
 
@@ -224,14 +229,15 @@ TEST_CASE("firered VAD probabilities over several parts match one model call") {
     });
 }
 
-TEST_CASE("firered VAD default post-processor settings match the upstream README") {
+TEST_CASE("firered VAD default post-processor settings are the upstream README values, merged") {
     const es::VadPostprocessParams full = ev::FireRedVad::default_params(false);
     CHECK(full.smooth_window_size == 5);
     CHECK(full.prob_threshold == 0.4);
     CHECK(full.min_speech_frame == 20);
     CHECK(full.max_speech_frame == 2000);
     CHECK(full.min_silence_frame == 20);
-    CHECK(full.merge_silence_frame == 0);
+    // The one setting that differs from the upstream README, which uses 0.
+    CHECK(full.merge_silence_frame == 50);
     CHECK(full.extend_speech_frame == 0);
 
     const es::VadPostprocessParams stream = ev::FireRedVad::default_params(true);
@@ -350,7 +356,7 @@ TEST_CASE("each firered VAD override key sets its own field and changes the jfk 
         {"min_speech_frame=240", [](const auto& p) { return double(p.min_speech_frame); }, 240},
         {"max_speech_frame=200", [](const auto& p) { return double(p.max_speech_frame); }, 200},
         {"min_silence_frame=150", [](const auto& p) { return double(p.min_silence_frame); }, 150},
-        {"merge_silence_frame=50", [](const auto& p) { return double(p.merge_silence_frame); }, 50},
+        {"merge_silence_frame=0", [](const auto& p) { return double(p.merge_silence_frame); }, 0},
         {"extend_speech_frame=50", [](const auto& p) { return double(p.extend_speech_frame); }, 50},
     };
     for (const Case& c : cases) {

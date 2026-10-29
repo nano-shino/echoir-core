@@ -18,8 +18,9 @@ namespace echoir::vad {
 
 class FireRedVad : public IVad {
 public:
-    // Post-processor settings from the upstream README defaults. Stream-VAD uses a minimum speech
-    // run of 8 frames instead of 20. Streaming use never splits long speech (see VadUse).
+    // Post-processor settings from the upstream README defaults, except that gaps under 500 ms are
+    // merged (see default_params). Stream-VAD uses a minimum speech run of 8 frames instead of 20.
+    // Streaming use never splits long speech (see VadUse).
     static stream::VadPostprocessParams default_params(bool stream_variant,
                                                        VadUse use = VadUse::offline);
 
