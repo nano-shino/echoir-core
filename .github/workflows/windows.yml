@@ -1,0 +1,69 @@
+# Windows x64 build and tests. MSVC + Ninja, preset windows-cpu-x64.
+# Unit tests always run. Integration tests run with whisper-tiny-en and the Silero VAD, fetched by
+# tools/fetch-models.ps1 and cached; tests whose model is missing (Qwen) skip.
+name: windows
+
+on:
+  push:
+    branches: [main, "ci/**"]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: windows-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  cpu-x64:
+    runs-on: windows-latest
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      - name: Tool versions
+        shell: pwsh
+        run: |
+          cmake --version
+          ninja --version
+          cl 2>&1 | Select-Object -First 1
+
+      - name: Cache models
+        uses: actions/cache@v4
+        with:
+          path: |
+            models/*.bin
+            models/*.gguf
+          key: models-${{ hashFiles('models/registry.json') }}-tiny-silero
+
+      - name: Fetch models
+        shell: pwsh
+        run: tools/fetch-models.ps1 whisper-tiny-en silero-v6.2.0
+
+      - name: Configure
+        run: cmake --preset windows-cpu-x64
+
+      - name: Build
+        run: cmake --build --preset windows-cpu-x64
+
+      # The silence case needs a 30 s silent WAV and an empty reference. Only the stdlib is used.
+      - name: Silence fixture
+        shell: pwsh
+        run: python -I -c "import os, wave; os.makedirs('build/fixtures', exist_ok=True); w = wave.open('build/fixtures/silence_30s.wav', 'wb'); w.setnchannels(1); w.setsampwidth(2); w.setframerate(16000); w.writeframes(bytes(16000 * 2 * 30)); w.close(); open('build/fixtures/silence_30s.ref.txt', 'w').close()"
+
+      # -V prints every test's output, so the doctest summary and the SKIP lines are visible.
+      - name: Test
+        run: ctest --preset windows-cpu-x64 -V
+
+      - name: Upload test log
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: windows-cpu-x64-testlog
+          path: build/windows-cpu-x64/Testing/Temporary/LastTest.log
+          if-no-files-found: ignore

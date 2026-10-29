@@ -1,0 +1,160 @@
+Third-party notices for echoir-core
+
+This file lists the third-party work that echoir-core ports, converts, builds in, ships or depends
+on. Section 3 covers tools that are not distributed. Sections 4 to 11 cover the libraries that the
+built libraries, the echoir command line and the release archives contain. The full license texts
+of these libraries ship in the licenses/ folder of every release archive and of the NuGet package.
+In the repository, the libraries under third_party/ keep their license files next to them: the
+submodules in their own trees, each single header with a `<name>.LICENSE.txt` file in
+third_party/single/, and the Apache-2.0 and LLVM exception texts in third_party/licenses/.
+
+1. FireRedVAD (code and weights)
+
+   Authors:  FireRedTeam
+   License:  Apache License, Version 2.0 (licenses/Apache-2.0.txt)
+   Status:   Apache-2.0 is the license recorded for this work in models/registry.json and in the
+             converted GGUF files. The upstream repository's LICENSE file is Apache-2.0 (checked
+             on GitHub, 2026-10-29).
+
+   Upstream sources
+   - Code: https://github.com/FireRedTeam/FireRedVAD, commit
+     c30ec49e8cc69642b0ee65362eba11b9d11c6e54
+   - Weights: https://huggingface.co/FireRedTeam/FireRedVAD, revision
+     7990aaccc6b7aec1e527743bd30201f2c4a03b8c (directories VAD/ and Stream-VAD/, each with
+     model.pth.tar and cmvn.ark)
+
+   Use in echoir-core
+   - Network, feature front end and post-processor, written in C++ from the upstream code:
+     src/vad/firered_model.{h,cpp} (the DFSMN network, on ggml), src/audio/fbank.{h,cpp} (the
+     Kaldi front end and CMVN) and src/stream/vad_postprocess.{h,cpp} (the post-processor).
+     src/vad/firered_vad.{h,cpp} wires them together.
+   - tools/convert-firered-vad.py reads the upstream checkpoint layout and CMVN formula.
+   - tools/dev/firered_reference.py calls the upstream Python code to write the reference data.
+   - Weights: converted to GGUF by tools/convert-firered-vad.py. The converted files are hosted at
+     https://huggingface.co/nanoshino/FireRedVAD-GGUF (firered-vad-v1.gguf and
+     firered-stream-vad-v1.gguf), and tools/fetch-models.sh converts them locally from the
+     upstream weights when the hosted files are not available. The converter writes
+     general.license = "apache-2.0" and general.source.url into each file.
+   - Reference data: tests/fixtures/firered/ holds outputs (features, probabilities and speech
+     ranges) computed from the upstream code and weights.
+
+2. Qwen3-ASR streaming decoder (algorithm)
+
+   Authors:  Qwen team, Alibaba
+   License:  Apache License, Version 2.0 (licenses/Apache-2.0.txt)
+   Upstream: https://github.com/QwenLM/Qwen3-ASR, qwen_asr/inference/qwen3_asr.py
+             (streaming_transcribe and its rollback parameters)
+
+   Use in echoir-core
+   - The rollback stream policy in src/stream/session.cpp and the prefix rollback in
+     src/backends/qwen_backend.cpp follow the upstream scheme: the previous output, minus its last
+     tokens, is the fixed start of the next decode, and the first decodes have no fixed start. The
+     default counts (2 unfixed decodes, 5 rolled-back tokens) are the upstream defaults. No
+     upstream code is copied; the scheme is written in C++ and applied per speech segment.
+
+3. Reference implementations used by the development tools only (not vendored, not distributed)
+
+   - kaldi-native-fbank (https://github.com/csukuangfj/kaldi-native-fbank), by csukuangfj. Its
+     license is Apache License, Version 2.0 (checked on GitHub, 2026-10-29; the license text is in
+     licenses/Apache-2.0.txt). It is installed in the development Python environment for the
+     reference features.
+   - torch, numpy, kaldiio, pyyaml and soundfile are needed by tools/dev/firered_reference.py. They
+     are not part of this repository.
+
+   src/audio/fbank.{h,cpp} implement the same Kaldi computation in C++ and are checked against
+   those reference features. Their algorithm follows kaldi-native-fbank under the Apache-2.0
+   license, as the header of src/audio/fbank.h says. The code is ours, and nothing is copied from
+   kaldi-native-fbank.
+
+4. whisper.cpp
+
+   Copyright: (c) 2023-2026 The ggml authors (from its LICENSE file)
+   License:  MIT (licenses/whisper.cpp.LICENSE.txt)
+   Upstream: https://github.com/ggml-org/whisper.cpp, git submodule third_party/whisper.cpp at
+             d1be6fd (v1.9.5)
+
+   Use in echoir-core
+   - Built as libwhisper and linked into the core when ECHOIR_WITH_WHISPER is ON. It provides the
+     Whisper backend and the Silero VAD (src/vad/silero_vad.{h,cpp}).
+   - tests/fixtures/jfk.wav is the JFK sample from whisper.cpp samples/jfk.wav, byte-identical to
+     the copy at v1.9.5.
+
+5. llama.cpp and ggml
+
+   Copyright: (c) 2023-2026 The ggml authors (from its LICENSE file)
+   License:  MIT (licenses/llama.cpp.LICENSE.txt)
+   Upstream: https://github.com/ggml-org/llama.cpp, git submodule third_party/llama.cpp at
+             5320c87 (v0.7.0-232-g5320c87ff). ggml is built once from this tree and shared by
+             whisper.cpp, llama.cpp and libmtmd.
+
+   Use in echoir-core
+   - libllama and libmtmd, for the Qwen3-ASR backend (ECHOIR_WITH_QWEN).
+   - ggml, the tensor library that the Whisper and Qwen backends and the FireRedVAD network run on,
+     with the Metal and Vulkan backends when they are enabled.
+
+6. miniaudio
+
+   Copyright: (c) 2025 David Reid (from its license statement)
+   License:  Public domain (Unlicense) or MIT No Attribution (MIT-0), at your choice. The license
+             statements are at the end of third_party/single/miniaudio.h and in
+             licenses/miniaudio.LICENSE.txt.
+   Upstream: https://github.com/mackron/miniaudio, third_party/single/miniaudio.h, v0.11.25
+
+   Use in echoir-core
+   - Device capture (microphone and loopback), resampling and decoding in the core, in
+     src/audio/miniaudio_impl.cpp.
+
+7. CLI11
+
+   Copyright: (c) 2017-2025 University of Cincinnati, developed by Henry Schreiner under NSF
+              AWARD 1414736
+   License:  BSD 3-Clause (licenses/CLI11.LICENSE.txt)
+   Upstream: https://github.com/CLIUtils/CLI11, third_party/single/CLI11.hpp
+
+   Use in echoir-core
+   - Command-line parsing of the echoir tool (cli/).
+
+8. doctest
+
+   Copyright: (c) 2016-2023 Viktor Kirilov
+   License:  MIT (licenses/doctest.LICENSE.txt)
+   Upstream: https://github.com/doctest/doctest, third_party/single/doctest.h, version 2.5.3
+
+   Use in echoir-core
+   - The unit and integration test runners only. It is not part of the built libraries or the
+     echoir tool.
+
+9. nlohmann/json
+
+   Copyright: (c) 2013-2025 Niels Lohmann
+   License:  MIT (licenses/json.LICENSE.txt)
+   Upstream: https://github.com/nlohmann/json, third_party/single/json.hpp, v3.12.0
+
+   Use in echoir-core
+   - The model registry and the JSON results of the core, the echoir tool and the JSON-lines
+     service protocol (docs/protocol.md).
+
+10. LLVM OpenMP runtime (libomp.so)
+
+    Authors:  The LLVM Project contributors
+    License:  Apache License, Version 2.0 with LLVM exceptions (Apache-2.0 WITH LLVM-exception).
+              The texts are in licenses/Apache-2.0.txt and licenses/LLVM-exception.txt.
+    Source:   libomp.so from the Android NDK (lib/clang/<version>/lib/linux/aarch64), copied by
+              the Android build. The NDK's own license terms cover the NDK.
+
+    Use in echoir-core
+    - ggml's OpenMP links libomp.so on Android, and Android does not ship it. The Android archive
+      (echoir-<version>-android-arm64.zip) and the android-arm64 assets of the Echoir.Core NuGet
+      package contain it beside the echoir libraries.
+
+11. Microsoft Visual C++ runtime
+
+    Files:    vcruntime140.dll, vcruntime140_1.dll, msvcp140.dll, vcomp140.dll
+    License:  Microsoft Visual Studio redistributable files, under the Visual Studio license terms
+    Source:   the Visual Studio redistributable folder, copied by tools/package-windows.ps1
+
+    Use in echoir-core
+    - The Windows echoir archives (echoir-<version>-windows-cpu-x64.zip and
+      echoir-<version>-windows-vulkan-x64.zip) contain them, so echoir.exe runs without the Visual
+      C++ redistributable installed. vcomp140.dll is the OpenMP runtime that ggml-cpu imports. The
+      NuGet win-x64 assets do not contain these files.

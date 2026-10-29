@@ -1,0 +1,27 @@
+{
+  "clip": "tone_noise",
+  "sample_rate": 16000,
+  "samples": 48000,
+  "duration_s": 3.0,
+  "frames": 298,
+  "dumped_frames": {
+    "fbank": 298,
+    "feat": 298
+  },
+  "shapes": {
+    "fbank": [
+      298,
+      80
+    ],
+    "feat": [
+      298,
+      80
+    ],
+    "vad_probs": [
+      298
+    ]
+  },
+  "segments": {
+    "vad": 0
+  }
+}

@@ -1,0 +1,27 @@
+root = true
+
+# LF line endings, 4-space indent, UTF-8.
+[*]
+charset = utf-8
+end_of_line = lf
+indent_style = space
+indent_size = 4
+insert_final_newline = true
+trim_trailing_whitespace = true
+
+[*.{cmake,json,yml,yaml}]
+indent_size = 2
+
+[CMakeLists.txt]
+indent_size = 2
+
+[*.md]
+trim_trailing_whitespace = false
+
+# Vendored code is copied verbatim; don't reformat it.
+[third_party/**]
+end_of_line = unset
+insert_final_newline = unset
+trim_trailing_whitespace = unset
+indent_style = unset
+indent_size = unset

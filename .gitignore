@@ -1,0 +1,18 @@
+build/
+models/*
+!models/registry.json
+# Upstream checkpoints fetched for a convert_from fallback (tools/fetch-models.sh).
+models/.firered/
+.DS_Store
+*.part
+
+# Local tooling and IDE state
+CMakeUserPresets.json
+.cache/
+.clangd/
+.vs/
+.vscode/
+.idea/
+
+# Local-only fixtures that may not be redistributed
+tests/fixtures/private/

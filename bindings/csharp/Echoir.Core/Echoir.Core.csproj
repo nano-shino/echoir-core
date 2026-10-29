@@ -1,0 +1,91 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <!-- Android and iOS need their workloads. Set EchoirMobile=true to build those targets too. -->
+    <EchoirMobile Condition="'$(EchoirMobile)' == ''">false</EchoirMobile>
+    <TargetFrameworks Condition="'$(EchoirMobile)' != 'true'">net10.0</TargetFrameworks>
+    <TargetFrameworks Condition="'$(EchoirMobile)' == 'true'">net10.0;net10.0-android;net10.0-ios</TargetFrameworks>
+
+    <RootNamespace>Echoir.Core</RootNamespace>
+    <AssemblyName>Echoir.Core</AssemblyName>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <LangVersion>latest</LangVersion>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <TreatWarningsAsErrors>false</TreatWarningsAsErrors>
+    <Description>.NET binding for the echoir core: live transcription, model catalogue and download.</Description>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageProjectUrl>https://github.com/nano-shino/echoir-core</PackageProjectUrl>
+    <RepositoryUrl>https://github.com/nano-shino/echoir-core</RepositoryUrl>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+
+    <!-- Folder with the native build (echoir.dll and the ggml, whisper, llama and mtmd libraries). -->
+    <EchoirNativeDir Condition="'$(EchoirNativeDir)' == ''">$(MSBuildThisFileDirectory)..\..\..\build\windows-cpu-x64\bin</EchoirNativeDir>
+    <!-- Other desktop native folders (bin/ of a macos or linux build), empty unless packing them. -->
+    <EchoirOsxNativeDir Condition="'$(EchoirOsxNativeDir)' == ''"></EchoirOsxNativeDir>
+    <EchoirLinuxNativeDir Condition="'$(EchoirLinuxNativeDir)' == ''"></EchoirLinuxNativeDir>
+    <!-- Mobile native folders, empty unless packing them. -->
+    <EchoirAndroidNativeDir Condition="'$(EchoirAndroidNativeDir)' == ''"></EchoirAndroidNativeDir>
+    <EchoirIosXcframework Condition="'$(EchoirIosXcframework)' == ''"></EchoirIosXcframework>
+  </PropertyGroup>
+
+  <!-- The license, the third-party notices and the package readme, at the root of the package. -->
+  <ItemGroup>
+    <None Include="../../../LICENSE" Pack="true" PackagePath="\" />
+    <None Include="../../../THIRD_PARTY_NOTICES" Pack="true" PackagePath="\" />
+    <None Include="../README.md" Pack="true" PackagePath="\" />
+  </ItemGroup>
+  <!-- The full third-party license texts, in licenses/. -->
+  <ItemGroup>
+    <None Include="../../../third_party/single/*.LICENSE.txt;../../../third_party/licenses/*.txt" Pack="true" PackagePath="licenses" />
+  </ItemGroup>
+  <!-- The whisper.cpp and llama.cpp LICENSE files have the same name, so they are copied under
+       their library names into the intermediate folder before the package files are collected. -->
+  <Target Name="EchoirStageSubmoduleLicenses" BeforeTargets="_GetPackageFiles">
+    <PropertyGroup>
+      <EchoirLicenseStage>$(MSBuildProjectDirectory)/$(IntermediateOutputPath)licenses</EchoirLicenseStage>
+    </PropertyGroup>
+    <Copy SourceFiles="../../../third_party/whisper.cpp/LICENSE" DestinationFiles="$(EchoirLicenseStage)/whisper.cpp.LICENSE.txt" />
+    <Copy SourceFiles="../../../third_party/llama.cpp/LICENSE" DestinationFiles="$(EchoirLicenseStage)/llama.cpp.LICENSE.txt" />
+    <ItemGroup>
+      <None Include="$(EchoirLicenseStage)/*.txt" Pack="true" PackagePath="licenses" />
+    </ItemGroup>
+  </Target>
+
+  <!-- Windows x64: the core library and the native libraries it loads. -->
+  <ItemGroup Condition="Exists('$(EchoirNativeDir)\echoir.dll')">
+    <None Include="$(EchoirNativeDir)\echoir.dll" Pack="true" PackagePath="runtimes/win-x64/native/" Link="runtimes/win-x64/native/echoir.dll" Visible="false" />
+    <None Include="$(EchoirNativeDir)\ggml*.dll" Pack="true" PackagePath="runtimes/win-x64/native/" Link="runtimes/win-x64/native/%(Filename)%(Extension)" Visible="false" />
+    <None Include="$(EchoirNativeDir)\whisper.dll" Pack="true" PackagePath="runtimes/win-x64/native/" Link="runtimes/win-x64/native/whisper.dll" Visible="false" />
+    <None Include="$(EchoirNativeDir)\llama.dll" Pack="true" PackagePath="runtimes/win-x64/native/" Link="runtimes/win-x64/native/llama.dll" Visible="false" />
+    <None Include="$(EchoirNativeDir)\mtmd.dll" Pack="true" PackagePath="runtimes/win-x64/native/" Link="runtimes/win-x64/native/mtmd.dll" Visible="false" />
+  </ItemGroup>
+
+  <!-- macOS arm64 and Linux x64: libechoir and the names the libraries link against
+       (libwhisper.1.dylib, libggml.so.0). A package has no symlinks, so the other names of the same
+       files are left out. -->
+  <ItemGroup Condition="'$(EchoirOsxNativeDir)' != '' And Exists('$(EchoirOsxNativeDir)/libechoir.dylib')">
+    <None Include="$(EchoirOsxNativeDir)/libechoir.dylib;$(EchoirOsxNativeDir)/lib*.?.dylib" Exclude="$(EchoirOsxNativeDir)/lib*.*.*.dylib" Pack="true" PackagePath="runtimes/osx-arm64/native/" Visible="false" />
+  </ItemGroup>
+  <ItemGroup Condition="'$(EchoirLinuxNativeDir)' != '' And Exists('$(EchoirLinuxNativeDir)/libechoir.so')">
+    <None Include="$(EchoirLinuxNativeDir)/libechoir.so;$(EchoirLinuxNativeDir)/lib*.so.?" Pack="true" PackagePath="runtimes/linux-x64/native/" Visible="false" />
+  </ItemGroup>
+
+  <!-- Android arm64 and iOS, packed only when their native folders are given. -->
+  <ItemGroup Condition="'$(EchoirMobile)' == 'true' And '$(EchoirAndroidNativeDir)' != ''">
+    <None Include="$(EchoirAndroidNativeDir)\*.so" Pack="true" PackagePath="runtimes/android-arm64/native/" Visible="false" />
+  </ItemGroup>
+  <!-- A binding project carries its NativeReference to the app (Echoir.Core.resources next to the
+       assembly, and in the package); a plain library's NativeReference is dropped. -->
+  <PropertyGroup Condition="'$(EchoirMobile)' == 'true' And '$(EchoirIosXcframework)' != '' And '$(TargetFramework)' == 'net10.0-ios'">
+    <IsBindingProject>true</IsBindingProject>
+  </PropertyGroup>
+  <ItemGroup>
+    <Compile Remove="Native/ApiDefinition.ios.cs" />
+    <ObjcBindingApiDefinition Include="Native/ApiDefinition.ios.cs" Condition="'$(IsBindingProject)' == 'true'" />
+  </ItemGroup>
+  <ItemGroup Condition="'$(EchoirMobile)' == 'true' And '$(EchoirIosXcframework)' != ''">
+    <NativeReference Include="$(EchoirIosXcframework)" Kind="Static" SmartLink="False" IsCxx="True" Frameworks="Foundation Metal MetalKit Accelerate AVFoundation AudioToolbox CoreAudio" Condition="'$(TargetFramework)' == 'net10.0-ios'" />
+  </ItemGroup>
+
+</Project>

@@ -1,0 +1,144 @@
+{
+  "version": 1,
+  "_comment": "Model catalogue shared by all hosts. Sizes are exact byte counts from the HF API (?blobs=true), or from the conversion for files with convert_from. min_vram_mb values are estimates, to be tuned on hardware. Fetch with tools/fetch-models.sh <id> (or .ps1). An entry with convert_from is built from those upstream files when its hosted file is not available (HTTP 401 or 404). default_vad maps each backend (whisper, qwen) to the VAD it uses when none is given: the CLI, the end-to-end runner and the tests read it.",
+  "default_vad": {
+    "whisper": "silero-v6.2.0",
+    "qwen": "firered-vad-v1"
+  },
+  "models": [
+    {
+      "id": "whisper-tiny-en",
+      "backend": "whisper",
+      "display": "Whisper tiny (English)",
+      "files": [
+        {
+          "role": "model",
+          "name": "ggml-tiny.en.bin",
+          "url": "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-tiny.en.bin",
+          "size": 77704715
+        }
+      ],
+      "min_vram_mb": 390
+    },
+    {
+      "id": "whisper-base",
+      "backend": "whisper",
+      "display": "Whisper base (multilingual)",
+      "files": [
+        {
+          "role": "model",
+          "name": "ggml-base.bin",
+          "url": "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-base.bin",
+          "size": 147951465
+        }
+      ],
+      "min_vram_mb": 500
+    },
+    {
+      "id": "whisper-large-v3-turbo-q5_0",
+      "backend": "whisper",
+      "display": "Whisper large-v3-turbo (q5_0)",
+      "files": [
+        {
+          "role": "model",
+          "name": "ggml-large-v3-turbo-q5_0.bin",
+          "url": "https://huggingface.co/ggerganov/whisper.cpp/resolve/main/ggml-large-v3-turbo-q5_0.bin",
+          "size": 574041195
+        }
+      ],
+      "min_vram_mb": 1200
+    },
+    {
+      "id": "silero-v6.2.0",
+      "backend": "vad",
+      "display": "Silero VAD v6.2.0",
+      "files": [
+        {
+          "role": "vad",
+          "name": "ggml-silero-v6.2.0.bin",
+          "url": "https://huggingface.co/ggml-org/whisper-vad/resolve/main/ggml-silero-v6.2.0.bin",
+          "size": 885098
+        }
+      ],
+      "min_vram_mb": 0
+    },
+    {
+      "id": "qwen3-asr-0.6b-q8_0",
+      "backend": "qwen3-asr",
+      "display": "Qwen3-ASR 0.6B (Q8_0)",
+      "files": [
+        {
+          "role": "model",
+          "name": "Qwen3-ASR-0.6B-Q8_0.gguf",
+          "url": "https://huggingface.co/ggml-org/Qwen3-ASR-0.6B-GGUF/resolve/main/Qwen3-ASR-0.6B-Q8_0.gguf",
+          "size": 804749248
+        },
+        {
+          "role": "mmproj",
+          "name": "mmproj-Qwen3-ASR-0.6B-Q8_0.gguf",
+          "url": "https://huggingface.co/ggml-org/Qwen3-ASR-0.6B-GGUF/resolve/main/mmproj-Qwen3-ASR-0.6B-Q8_0.gguf",
+          "size": 214392480
+        }
+      ],
+      "min_vram_mb": 1500
+    },
+    {
+      "id": "qwen3-asr-1.7b-q8_0",
+      "backend": "qwen3-asr",
+      "display": "Qwen3-ASR 1.7B (Q8_0)",
+      "files": [
+        {
+          "role": "model",
+          "name": "Qwen3-ASR-1.7B-Q8_0.gguf",
+          "url": "https://huggingface.co/ggml-org/Qwen3-ASR-1.7B-GGUF/resolve/main/Qwen3-ASR-1.7B-Q8_0.gguf",
+          "size": 2165034944
+        },
+        {
+          "role": "mmproj",
+          "name": "mmproj-Qwen3-ASR-1.7B-Q8_0.gguf",
+          "url": "https://huggingface.co/ggml-org/Qwen3-ASR-1.7B-GGUF/resolve/main/mmproj-Qwen3-ASR-1.7B-Q8_0.gguf",
+          "size": 355709344
+        }
+      ],
+      "min_vram_mb": 3500
+    },
+    {
+      "id": "firered-vad-v1",
+      "backend": "vad",
+      "display": "FireRedVAD (VAD variant, GGUF v1)",
+      "license": "apache-2.0",
+      "convert_from": {
+        "model": "https://huggingface.co/FireRedTeam/FireRedVAD/resolve/main/VAD/model.pth.tar",
+        "cmvn": "https://huggingface.co/FireRedTeam/FireRedVAD/resolve/main/VAD/cmvn.ark"
+      },
+      "files": [
+        {
+          "role": "vad",
+          "name": "firered-vad-v1.gguf",
+          "url": "https://huggingface.co/nanoshino/FireRedVAD-GGUF/resolve/main/firered-vad-v1.gguf",
+          "size": 2358144
+        }
+      ],
+      "min_vram_mb": 0
+    },
+    {
+      "id": "firered-stream-vad-v1",
+      "backend": "vad",
+      "display": "FireRedVAD (Stream-VAD variant, GGUF v1)",
+      "license": "apache-2.0",
+      "convert_from": {
+        "model": "https://huggingface.co/FireRedTeam/FireRedVAD/resolve/main/Stream-VAD/model.pth.tar",
+        "cmvn": "https://huggingface.co/FireRedTeam/FireRedVAD/resolve/main/Stream-VAD/cmvn.ark"
+      },
+      "files": [
+        {
+          "role": "vad",
+          "name": "firered-stream-vad-v1.gguf",
+          "url": "https://huggingface.co/nanoshino/FireRedVAD-GGUF/resolve/main/firered-stream-vad-v1.gguf",
+          "size": 2275520
+        }
+      ],
+      "min_vram_mb": 0
+    }
+  ]
+}

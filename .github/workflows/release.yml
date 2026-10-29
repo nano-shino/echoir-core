@@ -1,0 +1,277 @@
+# Release artifacts: the CLI with its native libraries per desktop platform, the
+# Android and iOS native builds, and the Echoir.Core NuGet package that carries all of them.
+# A tag v<version> (the project version in CMakeLists.txt) publishes a GitHub release; a tag
+# v<version>-<suffix> (v3.0.0-alpha.1) publishes a pre-release, and the suffix goes into the
+# NuGet version. Archive names always carry the project version.
+# A push to ci/release or a manual run builds everything and keeps the files as workflow artifacts.
+name: release
+
+on:
+  push:
+    tags: ["v*"]
+    branches: ["ci/release"]
+  workflow_dispatch:
+
+concurrency:
+  group: release-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+# Release builds don't tune for the build machine (GGML_NATIVE=OFF). x64 targets x86-64-v3 (AVX2,
+# FMA, F16C, BMI2: Intel Haswell, AMD Zen and later). No tests: the CI workflows run them.
+env:
+  X64_FLAGS: -DGGML_NATIVE=OFF -DGGML_AVX=ON -DGGML_AVX2=ON -DGGML_FMA=ON -DGGML_F16C=ON -DGGML_BMI2=ON
+  VULKAN_VERSION: 1.4.321.1
+  ANDROID_NDK_VERSION: 29.0.14033849
+
+jobs:
+  version:
+    runs-on: ubuntu-24.04
+    outputs:
+      version: ${{ steps.v.outputs.version }}
+      package: ${{ steps.v.outputs.package }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: v
+        run: |
+          version="$(awk '/^[[:space:]]+VERSION[[:space:]]+[0-9]+\.[0-9]+\.[0-9]+/ { print $2; exit }' CMakeLists.txt)"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+          package="$version"
+          if [[ "$GITHUB_REF_TYPE" == tag ]]; then
+            if [[ "$GITHUB_REF_NAME" != "v$version" && "$GITHUB_REF_NAME" != "v$version"-* ]]; then
+              echo "::error::Tag $GITHUB_REF_NAME does not match the project version $version in CMakeLists.txt."
+              exit 1
+            fi
+            package="${GITHUB_REF_NAME#v}"
+          fi
+          echo "package=$package" >> "$GITHUB_OUTPUT"
+
+  windows:
+    needs: version
+    runs-on: windows-latest
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        preset: [windows-cpu-x64, windows-vulkan-x64]
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+      - name: Vulkan SDK
+        if: matrix.preset == 'windows-vulkan-x64'
+        shell: pwsh
+        run: |
+          $installer = Join-Path $env:RUNNER_TEMP 'vulkan-sdk.exe'
+          curl.exe -fsSL -o $installer "https://sdk.lunarg.com/sdk/download/$env:VULKAN_VERSION/windows/vulkansdk-windows-X64-$env:VULKAN_VERSION.exe"
+          & $installer --accept-licenses --default-answer --confirm-command install | Out-Host
+          $sdk = "C:\VulkanSDK\$env:VULKAN_VERSION"
+          if (-not (Test-Path "$sdk\Bin\glslc.exe")) { throw "The Vulkan SDK did not install to $sdk." }
+          "VULKAN_SDK=$sdk" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+          "$sdk\Bin" | Out-File -Append -Encoding utf8 $env:GITHUB_PATH
+      - name: Configure
+        shell: pwsh
+        run: |
+          $flags = $env:X64_FLAGS -split ' '
+          cmake --preset ${{ matrix.preset }} -DBUILD_TESTING=OFF @flags
+      - name: Build
+        run: cmake --build --preset ${{ matrix.preset }}
+      - name: Package
+        shell: pwsh
+        run: tools/package-windows.ps1 -Preset ${{ matrix.preset }}
+      - name: Smoke test from the archive
+        if: matrix.preset == 'windows-cpu-x64'
+        shell: pwsh
+        run: |
+          $zip = Get-ChildItem dist -Filter *.zip | Select-Object -First 1
+          $dir = Join-Path $env:RUNNER_TEMP 'smoke'
+          Expand-Archive $zip.FullName -DestinationPath $dir
+          $exe = Get-ChildItem $dir -Recurse -Filter echoir.exe | Select-Object -First 1
+          & $exe.FullName --help
+          if ($LASTEXITCODE -ne 0) { throw "echoir --help exited with $LASTEXITCODE" }
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ${{ matrix.preset }}
+          path: dist/*.zip
+          if-no-files-found: error
+
+  macos:
+    needs: version
+    # Newest Xcode image. Apple's libc++ declares floating-point from_chars only for macOS 26.0 and later.
+    runs-on: macos-26
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: Xcode
+        run: sudo xcode-select -s /Applications/Xcode_26.6.app
+      - run: brew list ninja >/dev/null 2>&1 || brew install ninja
+      - name: Configure
+        run: cmake --preset macos-metal -DBUILD_TESTING=OFF -DGGML_NATIVE=OFF -DCMAKE_OSX_DEPLOYMENT_TARGET=13.3
+      - name: Build
+        run: cmake --build --preset macos-metal
+      - name: Package
+        run: bash tools/package-native.sh desktop macos-metal macos-arm64-metal
+      - name: Smoke test from the archive
+        run: |
+          mkdir -p "$RUNNER_TEMP/smoke" && tar -C "$RUNNER_TEMP/smoke" -xzf dist/*.tar.gz
+          "$RUNNER_TEMP"/smoke/*/echoir --help
+          otool -L "$RUNNER_TEMP"/smoke/*/libechoir.dylib
+      - uses: actions/upload-artifact@v4
+        with:
+          name: macos-arm64-metal
+          path: dist/*.tar.gz
+          if-no-files-found: error
+
+  linux:
+    needs: version
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - run: sudo apt-get update && sudo apt-get install -y ninja-build
+      # OpenMP off: ggml's own thread pool, so the archive does not depend on libgomp.
+      - name: Configure
+        run: cmake --preset linux-cpu -DBUILD_TESTING=OFF -DGGML_OPENMP=OFF $X64_FLAGS
+      - name: Build
+        run: cmake --build --preset linux-cpu
+      - name: Package
+        run: bash tools/package-native.sh desktop linux-cpu linux-x64-cpu
+      - name: Smoke test from the archive
+        run: |
+          mkdir -p "$RUNNER_TEMP/smoke" && tar -C "$RUNNER_TEMP/smoke" -xzf dist/*.tar.gz
+          "$RUNNER_TEMP"/smoke/*/echoir --help
+          ldd "$RUNNER_TEMP"/smoke/*/libechoir.so
+      - uses: actions/upload-artifact@v4
+        with:
+          name: linux-x64-cpu
+          path: dist/*.tar.gz
+          if-no-files-found: error
+
+  android:
+    needs: version
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - run: sudo apt-get update && sudo apt-get install -y ninja-build
+      - name: Android NDK
+        run: |
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install "ndk;$ANDROID_NDK_VERSION" >/dev/null
+          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/$ANDROID_NDK_VERSION" >> "$GITHUB_ENV"
+      - name: Configure
+        run: cmake --preset android-arm64 -DBUILD_TESTING=OFF
+      - name: Build
+        run: cmake --build --preset android-arm64 --target echoir echoir_android_libomp
+      - name: Package
+        run: bash tools/package-native.sh android android-arm64 android-arm64
+      - uses: actions/upload-artifact@v4
+        with:
+          name: android-arm64
+          path: dist/*.zip
+          if-no-files-found: error
+
+  ios:
+    needs: version
+    runs-on: macos-26
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+      - name: Xcode
+        run: sudo xcode-select -s /Applications/Xcode_26.6.app
+      - run: brew list ninja >/dev/null 2>&1 || brew install ninja
+      - name: Configure
+        run: |
+          cmake --preset ios-arm64
+          cmake --preset ios-arm64-simulator
+      - name: Build
+        run: |
+          cmake --build --preset ios-arm64
+          cmake --build --preset ios-arm64-simulator
+      - name: Package
+        run: bash tools/package-native.sh ios build/ios-arm64 build/ios-arm64-simulator ios-arm64
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ios-arm64
+          path: dist/*.zip
+          if-no-files-found: error
+
+  nuget:
+    needs: [version, windows, macos, linux, android, ios]
+    # The net10.0-ios target packs only on macOS.
+    runs-on: macos-26
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+      - name: Xcode
+        run: sudo xcode-select -s /Applications/Xcode_26.6.app
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+      - run: dotnet workload install android ios
+      - uses: actions/download-artifact@v4
+        with:
+          path: artifacts
+          merge-multiple: true
+      - name: Unpack native builds
+        run: |
+          mkdir -p native
+          cd native
+          unzip -q ../artifacts/*-windows-vulkan-x64.zip
+          tar -xzf ../artifacts/*-macos-arm64-metal.tar.gz
+          tar -xzf ../artifacts/*-linux-x64-cpu.tar.gz
+          unzip -q ../artifacts/*-android-arm64.zip
+          unzip -q ../artifacts/*-ios-arm64.zip
+          ls
+      - name: Pack
+        run: |
+          v="${{ needs.version.outputs.version }}"
+          n="$PWD/native"
+          dotnet pack bindings/csharp/Echoir.Core -c Release -o dist \
+            -p:EchoirMobile=true -p:Version="${{ needs.version.outputs.package }}" \
+            -p:EchoirNativeDir="$n/echoir-$v-windows-vulkan-x64" \
+            -p:EchoirOsxNativeDir="$n/echoir-$v-macos-arm64-metal" \
+            -p:EchoirLinuxNativeDir="$n/echoir-$v-linux-x64-cpu" \
+            -p:EchoirAndroidNativeDir="$n/echoir-$v-android-arm64/arm64-v8a" \
+            -p:EchoirIosXcframework="$n/echoir-$v-ios-arm64/Echoir.xcframework"
+          unzip -l dist/*.nupkg
+      - uses: actions/upload-artifact@v4
+        with:
+          name: nuget
+          path: dist/*.nupkg
+          if-no-files-found: error
+
+  publish:
+    needs: [version, nuget]
+    if: github.ref_type == 'tag'
+    runs-on: ubuntu-24.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - name: Checksums
+        run: cd dist && sha256sum * > SHA256SUMS && cat SHA256SUMS
+      - name: Create the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          package="${{ needs.version.outputs.package }}"
+          prerelease=()
+          [[ "$package" == *-* ]] && prerelease=(--prerelease)
+          gh release create "$GITHUB_REF_NAME" dist/* --repo "$GITHUB_REPOSITORY" \
+            --title "echoir $package" --generate-notes "${prerelease[@]}"

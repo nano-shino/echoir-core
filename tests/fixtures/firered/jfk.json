@@ -1,0 +1,31 @@
+{
+  "clip": "jfk",
+  "sample_rate": 16000,
+  "samples": 176000,
+  "duration_s": 11.0,
+  "frames": 1098,
+  "dumped_frames": {
+    "fbank": 300,
+    "feat": 1098
+  },
+  "shapes": {
+    "fbank": [
+      300,
+      80
+    ],
+    "feat": [
+      1098,
+      80
+    ],
+    "vad_probs": [
+      1098
+    ],
+    "stream_probs": [
+      1098
+    ]
+  },
+  "segments": {
+    "vad": 4,
+    "stream": 4
+  }
+}

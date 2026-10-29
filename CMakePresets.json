@@ -1,0 +1,299 @@
+{
+  "version": 3,
+  "cmakeMinimumRequired": {
+    "major": 3,
+    "minor": 24,
+    "patch": 0
+  },
+  "configurePresets": [
+    {
+      "name": "base",
+      "hidden": true,
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/${presetName}",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "RelWithDebInfo",
+        "ECHOIR_WITH_WHISPER": "ON",
+        "ECHOIR_WITH_QWEN": "ON",
+        "GGML_METAL": "OFF",
+        "GGML_VULKAN": "OFF",
+        "GGML_CUDA": "OFF"
+      }
+    },
+    {
+      "name": "macos-cpu",
+      "displayName": "macOS arm64, CPU only",
+      "description": "Apple clang 17 with Ninja. No GPU. Baseline for tests.",
+      "inherits": "base"
+    },
+    {
+      "name": "macos-tsan",
+      "displayName": "macOS arm64, CPU only, ThreadSanitizer",
+      "description": "Apple clang 17 with Ninja, as macos-cpu, built with -fsanitize=thread. Runs the unit tests and the live stress test.",
+      "inherits": "macos-cpu",
+      "cacheVariables": {
+        "CMAKE_C_FLAGS": "-fsanitize=thread -fno-omit-frame-pointer",
+        "CMAKE_CXX_FLAGS": "-fsanitize=thread -fno-omit-frame-pointer"
+      }
+    },
+    {
+      "name": "macos-metal",
+      "displayName": "macOS arm64, Metal",
+      "description": "Apple clang 17 with Ninja, ggml Metal on.",
+      "inherits": "base",
+      "cacheVariables": {
+        "GGML_METAL": "ON"
+      }
+    },
+    {
+      "name": "macos-static",
+      "displayName": "macOS arm64, CPU only, static libraries",
+      "description": "Apple clang 17 with Ninja. BUILD_SHARED_LIBS=OFF: ggml, libwhisper, libllama and libmtmd link statically. Catches duplicate symbols.",
+      "inherits": "base",
+      "cacheVariables": {
+        "BUILD_SHARED_LIBS": "OFF"
+      }
+    },
+    {
+      "name": "windows-vulkan-x64",
+      "displayName": "Windows x64, Vulkan",
+      "description": "MSVC (cl) with Ninja, from a VS x64 developer shell, plus the Vulkan SDK (VULKAN_SDK set). Built and tested on Windows with an NVIDIA GPU. CI tests only windows-cpu-x64; release.yml packages this one.",
+      "inherits": "base",
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Windows"
+      },
+      "cacheVariables": {
+        "GGML_VULKAN": "ON",
+        "CMAKE_C_COMPILER": "cl",
+        "CMAKE_CXX_COMPILER": "cl"
+      }
+    },
+    {
+      "name": "windows-cpu-x64",
+      "displayName": "Windows x64, CPU only",
+      "description": "MSVC (cl) with Ninja, from a VS x64 developer shell. CPU only. Built by CI (.github/workflows/windows.yml).",
+      "inherits": "base",
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Windows"
+      },
+      "cacheVariables": {
+        "CMAKE_C_COMPILER": "cl",
+        "CMAKE_CXX_COMPILER": "cl"
+      }
+    },
+    {
+      "name": "linux-cpu",
+      "displayName": "Linux x64, CPU only",
+      "description": "Built by .github/workflows/release.yml, which also sets GGML_OPENMP=OFF and the x86-64-v3 flags.",
+      "inherits": "base",
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Linux"
+      }
+    },
+    {
+      "name": "android-arm64",
+      "displayName": "Android arm64, CPU",
+      "description": "Needs ANDROID_NDK_HOME. Built by .github/workflows/release.yml.",
+      "inherits": "base",
+      "condition": {
+        "type": "notEquals",
+        "lhs": "$env{ANDROID_NDK_HOME}",
+        "rhs": ""
+      },
+      "cacheVariables": {
+        "CMAKE_TOOLCHAIN_FILE": "$env{ANDROID_NDK_HOME}/build/cmake/android.toolchain.cmake",
+        "ANDROID_ABI": "arm64-v8a",
+        "ANDROID_PLATFORM": "android-29"
+      }
+    },
+    {
+      "name": "ios-arm64",
+      "displayName": "iOS arm64, Metal, static",
+      "description": "Needs full Xcode for the iphoneos SDK. Static libraries for the device slice of Echoir.xcframework; build the echoir target only. ios-arm64-simulator is the simulator slice.",
+      "inherits": "base",
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Darwin"
+      },
+      "cacheVariables": {
+        "CMAKE_SYSTEM_NAME": "iOS",
+        "CMAKE_OSX_SYSROOT": "iphoneos",
+        "CMAKE_OSX_ARCHITECTURES": "arm64",
+        "CMAKE_OSX_DEPLOYMENT_TARGET": "15.0",
+        "BUILD_SHARED_LIBS": "OFF",
+        "BUILD_TESTING": "OFF",
+        "GGML_METAL": "ON"
+      }
+    },
+    {
+      "name": "ios-arm64-simulator",
+      "displayName": "iOS simulator arm64, CPU, static",
+      "description": "The simulator slice of Echoir.xcframework. CPU only: ggml's Metal backend fails to load models on the simulator's GPU.",
+      "inherits": "ios-arm64",
+      "cacheVariables": {
+        "CMAKE_OSX_SYSROOT": "iphonesimulator",
+        "GGML_METAL": "OFF"
+      }
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "macos-cpu",
+      "configurePreset": "macos-cpu"
+    },
+    {
+      "name": "macos-tsan",
+      "configurePreset": "macos-tsan"
+    },
+    {
+      "name": "macos-metal",
+      "configurePreset": "macos-metal"
+    },
+    {
+      "name": "macos-static",
+      "configurePreset": "macos-static"
+    },
+    {
+      "name": "windows-cpu-x64",
+      "configurePreset": "windows-cpu-x64"
+    },
+    {
+      "name": "windows-vulkan-x64",
+      "configurePreset": "windows-vulkan-x64"
+    },
+    {
+      "name": "linux-cpu",
+      "configurePreset": "linux-cpu"
+    },
+    {
+      "name": "android-arm64",
+      "configurePreset": "android-arm64"
+    },
+    {
+      "name": "ios-arm64",
+      "configurePreset": "ios-arm64",
+      "targets": ["echoir"]
+    },
+    {
+      "name": "ios-arm64-simulator",
+      "configurePreset": "ios-arm64-simulator",
+      "targets": ["echoir"]
+    }
+  ],
+  "testPresets": [
+    {
+      "name": "macos-cpu",
+      "configurePreset": "macos-cpu",
+      "output": {
+        "outputOnFailure": true
+      },
+      "filter": {
+        "exclude": {
+          "label": "long"
+        }
+      },
+      "execution": {
+        "noTestsAction": "error"
+      }
+    },
+    {
+      "name": "macos-tsan",
+      "configurePreset": "macos-tsan",
+      "output": {
+        "outputOnFailure": true
+      },
+      "filter": {
+        "include": {
+          "label": "unit|stress"
+        }
+      },
+      "execution": {
+        "noTestsAction": "error"
+      }
+    },
+    {
+      "name": "macos-metal",
+      "configurePreset": "macos-metal",
+      "output": {
+        "outputOnFailure": true
+      },
+      "filter": {
+        "exclude": {
+          "label": "long"
+        }
+      },
+      "execution": {
+        "noTestsAction": "error"
+      }
+    },
+    {
+      "name": "macos-metal-quick",
+      "displayName": "macOS arm64, Metal, without the e2e, long and stress labels",
+      "description": "Unit, C ABI, CLI usage and integration tests, about a minute. A preset's filter replaces -LE on the command line, so this is the way to leave the e2e cases out.",
+      "configurePreset": "macos-metal",
+      "output": {
+        "outputOnFailure": true
+      },
+      "filter": {
+        "exclude": {
+          "label": "e2e|long|stress"
+        }
+      },
+      "execution": {
+        "noTestsAction": "error"
+      }
+    },
+    {
+      "name": "macos-static",
+      "configurePreset": "macos-static",
+      "output": {
+        "outputOnFailure": true
+      },
+      "filter": {
+        "exclude": {
+          "label": "long"
+        }
+      },
+      "execution": {
+        "noTestsAction": "error"
+      }
+    },
+    {
+      "name": "windows-cpu-x64",
+      "configurePreset": "windows-cpu-x64",
+      "output": {
+        "outputOnFailure": true
+      },
+      "filter": {
+        "exclude": {
+          "label": "long"
+        }
+      },
+      "execution": {
+        "noTestsAction": "error"
+      }
+    },
+    {
+      "name": "windows-vulkan-x64",
+      "configurePreset": "windows-vulkan-x64",
+      "output": {
+        "outputOnFailure": true
+      },
+      "filter": {
+        "exclude": {
+          "label": "long"
+        }
+      },
+      "execution": {
+        "noTestsAction": "error"
+      }
+    }
+  ]
+}

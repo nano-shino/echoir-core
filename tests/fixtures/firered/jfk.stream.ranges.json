@@ -1,0 +1,32 @@
+{
+  "model": "Stream-VAD",
+  "params": {
+    "smooth_window_size": 5,
+    "prob_threshold": 0.4,
+    "min_speech_frame": 8,
+    "max_speech_frame": 2000,
+    "min_silence_frame": 20,
+    "merge_silence_frame": 0,
+    "extend_speech_frame": 0
+  },
+  "frames": 1098,
+  "duration_s": 11.0,
+  "ranges": [
+    [
+      0.28,
+      2.5
+    ],
+    [
+      3.25,
+      4.57
+    ],
+    [
+      5.38,
+      7.83
+    ],
+    [
+      8.15,
+      11.0
+    ]
+  ]
+}

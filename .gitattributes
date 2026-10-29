@@ -1,0 +1,15 @@
+# LF line endings in the repo and in the working tree.
+* text=auto eol=lf
+
+# Binary assets: never normalize, never diff as text.
+*.wav binary
+*.bin binary
+*.f32 binary
+*.gguf binary
+*.png binary
+*.jpg binary
+*.dll binary
+*.so binary
+*.dylib binary
+*.a binary
+*.lib binary

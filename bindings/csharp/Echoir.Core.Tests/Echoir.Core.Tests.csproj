@@ -1,0 +1,35 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <IsPackable>false</IsPackable>
+    <IsTestProject>true</IsTestProject>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <LangVersion>latest</LangVersion>
+    <AllowUnsafeBlocks>true</AllowUnsafeBlocks>
+    <RollForward>Major</RollForward>
+  </PropertyGroup>
+
+  <PropertyGroup>
+    <!-- The native folder to test against: the fake build or the real build. Set ECHOIR_NATIVE_DIR to pick one. -->
+    <EchoirNativeDir Condition="'$(ECHOIR_NATIVE_DIR)' != ''">$(ECHOIR_NATIVE_DIR)</EchoirNativeDir>
+    <EchoirNativeDir Condition="'$(EchoirNativeDir)' == ''">$(MSBuildThisFileDirectory)..\..\..\build\windows-cpu-x64\bin</EchoirNativeDir>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.NET.Test.Sdk" Version="17.12.0" />
+    <PackageReference Include="MSTest.TestAdapter" Version="3.6.3" />
+    <PackageReference Include="MSTest.TestFramework" Version="3.6.3" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Echoir.Core\Echoir.Core.csproj" />
+  </ItemGroup>
+
+  <!-- Copies the native libraries of the selected build next to the test host. -->
+  <ItemGroup>
+    <None Include="$(EchoirNativeDir)\*.dll" CopyToOutputDirectory="Always" Visible="false" />
+  </ItemGroup>
+
+</Project>
