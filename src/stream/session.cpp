@@ -48,9 +48,8 @@
 // split long speech. The limit counts from the segment's start, not from the window end, so audio
 // that piled up behind a long segment cannot move the limit. The cut is at the latest pause of at
 // least 250 ms in the segment, and without one at the quietest 100 ms block in the 3 s before the
-// limit (stream::find_cut). The part before the cut becomes a FINAL. The
-// rest is carried, and the next tick decodes it again, where it may be ongoing as a new segment
-// with a new id.
+// limit (stream::find_cut). The part before the cut becomes a FINAL. The rest is carried, and the
+// next tick decodes it again, where it may be ongoing as a new segment with a new id.
 //
 // Ids and events. Segment ids count up from 1 and are not reused, not even after reset(). An
 // ongoing segment keeps its id until it is final. A FINAL takes over the id of a PARTIAL that was

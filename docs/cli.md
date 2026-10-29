@@ -11,9 +11,10 @@ on standard input (the file `-`), or live audio from a capture device. It needs 
   deterministic. `--pace realtime` pushes it at the speed of the audio, while the session's worker
   decodes. `--min-chunk-ms` (500 by default) is how much new audio a decode waits for; 1000 halves
   the decode work at the cost of slower partials. `--max-segment-ms` (10000 by default) is the
-  length at which a segment is cut at a quiet point, searched in the 3 s before that length, so no
-  final is longer than it; a shorter length gives shorter finals at the cost of more cuts. Streaming
-  VADs do not split long speech, so this cut is the only one there (offline, the VAD splits it).
+  length at which a segment is cut at its latest pause (or, with none, at a quiet point in the 3 s
+  before that length), so no final is longer than it; a shorter length gives shorter finals at the
+  cost of more cuts. Streaming VADs do not split long speech, so this cut is the only one there
+  (offline, the VAD splits it).
 - `--policy` picks how the partial line is stabilized. `rollback`, the default on Qwen3-ASR, gives
   the decoder its previous output minus the last few tokens as a fixed start, so it only rewrites
   the end. `agreement`, the default on Whisper and available on both, keeps the part that the

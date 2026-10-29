@@ -93,8 +93,8 @@ typedef struct {
   const char* language;                // "en", "zh", ...; "auto" lets Whisper detect (default)
   int32_t     min_chunk_ms;            // a decode runs once more than this many ms are buffered
                                        // (default 500)
-  // Forced cut: a segment that reaches this length, in ms counted from its start, is split at a
-  // quiet point in the 3 s before that limit. At least 200.
+  // Forced cut: a segment that reaches this length, in ms counted from its start, is split at its
+  // latest pause, or without one at a quiet point in the 3 s before that limit. At least 200.
   int32_t     max_segment_ms;          // default 10000
   int32_t     emit_partials;           // 1 = emit PARTIAL events for the ongoing segment (default)
   int32_t     stream_policy;           // echoir_stream_policy; default ECHOIR_POLICY_DEFAULT
