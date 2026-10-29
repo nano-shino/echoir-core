@@ -12,6 +12,9 @@ using echoir::stream::find_cut;
 using echoir::stream::find_quietest_point;
 using echoir::stream::kCutSearch;
 using echoir::stream::kCutSearchStream;
+using echoir::stream::kMinCutLead;
+using echoir::stream::kMinPause;
+using echoir::stream::kPauseFrame;
 using echoir::stream::kQuietBlock;
 using echoir::stream::rms;
 
@@ -99,13 +102,75 @@ TEST_CASE("quietest point rejects ranges that break its preconditions") {
 TEST_CASE("the cut search covers only the window the caller passes before the cap") {
     CHECK(kCutSearch == 8 * 16000);
     CHECK(kCutSearchStream == 3 * 16000);
-    // Silent gaps at 2000 and 60000. The cap is 100000, so the 3 s window starts at 52000 and
-    // holds only the second gap, while the 8 s window starts at 0 and holds both.
+    // Silent gaps at 2000 and 60000, each shorter than a pause. The cap is 100000, so the 3 s
+    // window starts at 52000 and holds only the second gap, while the 8 s window starts at 0 and
+    // holds both.
     std::vector<float> x = background(200000);
     fill(x, 2000, 3200, 0.0f);
     fill(x, 60000, 3200, 0.0f);
     CHECK(find_cut(x, 0, 100000, 150000, kCutSearchStream) == 60800);
     CHECK(find_cut(x, 0, 100000, 150000, kCutSearch) == 2800);  // both silent, so the earlier wins
+}
+
+TEST_CASE("a pause anywhere in the segment beats a quieter block before the cap") {
+    CHECK(kPauseFrame == 160);
+    CHECK(kMinPause == 4000);
+    CHECK(kMinCutLead == 16000);
+    // A 300 ms pause at 4 s is outside the 3 s window before the 10 s cap, which holds a silent
+    // 100 ms gap, as a stop consonant would leave. The pause wins.
+    std::vector<float> x = background(200000);
+    fill(x, 64000, 4800, 0.0f);
+    fill(x, 140000, 1600, 0.0f);
+    CHECK(find_cut(x, 0, 160000, 200000, kCutSearchStream) == 64000 + 2400);
+}
+
+TEST_CASE("the latest pause wins") {
+    std::vector<float> x = background(200000);
+    fill(x, 32000, 8000, 0.0f);
+    fill(x, 96000, 4000, 0.0f);
+    CHECK(find_cut(x, 0, 160000, 200000, kCutSearchStream) == 96000 + 2000);
+}
+
+TEST_CASE("a quiet run shorter than a pause is not one") {
+    // 240 ms of silence is a frame short, so the quietest block before the cap gives the cut.
+    std::vector<float> x = background(200000);
+    fill(x, 64000, 3840, 0.0f);
+    fill(x, 140000, 1600, 0.0f);
+    CHECK(find_cut(x, 0, 160000, 200000, kCutSearchStream) == 140800);
+}
+
+TEST_CASE("a pause counts against the segment's loud level, not only silence") {
+    // The background has a mean square of 0.125. A frame of 0.01 is 31 dB below it, so it is
+    // quiet, and a frame of 0.02 is 25 dB below it, so it is not.
+    std::vector<float> x = background(200000);
+    fill(x, 64000, 4800, 0.01f);
+    fill(x, 140000, 1600, 0.0f);
+    CHECK(find_cut(x, 0, 160000, 200000, kCutSearchStream) == 64000 + 2400);
+    fill(x, 64000, 4800, 0.02f);
+    CHECK(find_cut(x, 0, 160000, 200000, kCutSearchStream) == 140800);
+}
+
+TEST_CASE("a pause in the lead after the segment start is not cut at") {
+    // Segment starts at 16000, so a pause must reach past 32000. A pause that ends at 32000 does
+    // not, and one that ends a frame later does, and the cut moves to the lead's end.
+    std::vector<float> x = background(200000);
+    fill(x, 140000, 1600, 0.0f);
+    fill(x, 24000, 8000, 0.0f);
+    CHECK(find_cut(x, 16000, 176000, 200000, kCutSearchStream) == 140800);
+    fill(x, 32000, 160, 0.0f);
+    CHECK(find_cut(x, 16000, 176000, 200000, kCutSearchStream) == 32000);
+}
+
+TEST_CASE("a pause that runs past the cap is cut in the part before it") {
+    // The pause covers [152000, 168000) and the cap is 160000, so only [152000, 160000) counts.
+    std::vector<float> x = background(200000);
+    fill(x, 152000, 16000, 0.0f);
+    CHECK(find_cut(x, 0, 160000, 200000, kCutSearchStream) == 156000);
+    // Audio past the segment end does not count either. With the end at 156000, 4000 samples of
+    // the pause remain, which is just a pause. A frame less is not one, and the first silent
+    // block gives the cut.
+    CHECK(find_cut(x, 0, 160000, 156000, kCutSearchStream) == 154000);
+    CHECK(find_cut(x, 0, 160000, 155840, kCutSearchStream) == 152800);
 }
 
 TEST_CASE("sliding search agrees with a brute-force reference") {
