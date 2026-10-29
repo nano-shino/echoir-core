@@ -18,7 +18,8 @@ namespace et = echoir::test;
 
 namespace {
 
-// A forced cut is searched in the 3 s before the cap, so a cut segment is at least 17 s long.
+// runon_en has no pause, so a forced cut is searched in the 3 s before the cap, and a cut segment
+// is at least 17 s long.
 constexpr std::int64_t kMinCutSegmentMs = 17000;
 
 // The whole span as one speech range. The session then keeps its open segment running until the
@@ -53,8 +54,8 @@ TEST_CASE("stream session keeps its invariants on sentences_en with qwen") {
 }
 
 // runon_en is continuous speech, so the open segment reaches the cap, and the session must cut it.
-// The cut is the quietest block in the last 3 s before the cap, so each cut segment lasts between
-// 17 s and 20 s. Only the final flushed segment may be shorter.
+// With no pause, the cut is the quietest block in the last 3 s before the cap, so each cut segment
+// lasts between 17 s and 20 s. Only the final flushed segment may be shorter.
 static void check_forced_cuts(const et::BackendCase& backend) {
     const auto fixture = et::fixture("runon_en");
     ECHOIR_REQUIRE_OR_SKIP(fixture, "runon_en.wav fixture");
