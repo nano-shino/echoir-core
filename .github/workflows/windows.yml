@@ -6,7 +6,16 @@ name: windows
 on:
   push:
     branches: [main, "ci/**"]
+    paths-ignore: &unbuilt
+      - "**.md"
+      - "docs/**"
+      - "LICENSE"
+      - "THIRD_PARTY_NOTICES"
+      - "bindings/csharp/**"
+      - "tools/package-*"
+      - ".github/workflows/release.yml"
   pull_request:
+    paths-ignore: *unbuilt
   workflow_dispatch:
 
 concurrency:
@@ -45,11 +54,24 @@ jobs:
         shell: pwsh
         run: tools/fetch-models.ps1 whisper-tiny-en silero-v6.2.0
 
+      - name: Compiler cache
+        uses: hendrikmuhs/ccache-action@v1.2
+        with:
+          key: windows-cpu-x64
+          max-size: 2G
+
+      # ccache cannot cache objects compiled with /Zi (shared PDB), so debug info goes into the objects (/Z7).
       - name: Configure
-        run: cmake --preset windows-cpu-x64
+        run: >-
+          cmake --preset windows-cpu-x64
+          -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
+          -DCMAKE_POLICY_DEFAULT_CMP0141=NEW -DCMAKE_MSVC_DEBUG_INFORMATION_FORMAT=Embedded
 
       - name: Build
         run: cmake --build --preset windows-cpu-x64
+
+      - name: Compiler cache stats
+        run: ccache -s
 
       # The silence case needs a 30 s silent WAV and an empty reference. Only the stdlib is used.
       - name: Silence fixture
