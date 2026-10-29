@@ -77,6 +77,11 @@ case "$mode" in
     cp "$bin/echoir" "$pkg/"
     copy_runtime_libs "$bin" "$pkg" "$ext"
     [[ -e "$pkg/libggml.$ext" ]] || { echo "libggml.$ext is missing." >&2; exit 1; }
+    # RelWithDebInfo embeds DWARF in ELF files (over 90% of their size); macOS keeps it in the
+    # object files. The symbol table stays, so backtraces keep function names.
+    if [[ "$ext" == so ]]; then
+      find "$pkg" -maxdepth 1 -type f \( -name echoir -o -name '*.so*' \) -exec strip --strip-debug {} +
+    fi
     cp "$root/models/registry.json" "$pkg/models/"
     copy_notices "$pkg"
     cat > "$pkg/README.txt" <<EOF
@@ -108,11 +113,14 @@ EOF
     [[ -f "$bin/libomp.so" ]] || { echo "$bin/libomp.so is missing; the Android build copies it from the NDK." >&2; exit 1; }
     : "${ANDROID_NDK_HOME:?ANDROID_NDK_HOME is not set}"
     readelf="$(ls "$ANDROID_NDK_HOME"/toolchains/llvm/prebuilt/*/bin/llvm-readelf | head -n 1)"
+    llvm_strip="$(dirname "$readelf")/llvm-strip"
     name="echoir-$version-$label"
     pkg="$stage/$name"
     mkdir -p "$pkg/arm64-v8a"
     copy_runtime_libs "$bin" "$pkg/arm64-v8a" so
     cp "$bin/libomp.so" "$pkg/arm64-v8a/"
+    # The embedded DWARF is most of each library; the symbol table stays.
+    "$llvm_strip" --strip-debug "$pkg"/arm64-v8a/*.so
     for so in "$pkg"/arm64-v8a/*.so; do
       # Every LOAD segment's alignment (last column) must be at least 0x4000 for 16 KB pages.
       while read -r align; do
