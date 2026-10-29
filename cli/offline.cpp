@@ -80,9 +80,9 @@ OfflineResult transcribe_offline(const TranscribeOptions& o,
         if (last <= first) {
             continue;
         }
-        // A long range is cut at the quietest point in the 8 s before each 20 s cap, which is where
-        // a pause is most likely. The search ends a quiet block before the range end, so no cut
-        // leaves a sliver behind.
+        // A long range is cut before each 20 s cap at its latest pause, and without one at the
+        // quietest point in the 8 s before the cap (stream::find_cut). No cut lies within a quiet
+        // block of the range end, so no cut leaves a sliver behind.
         std::size_t piece = first;
         while (last - piece > kMaxPieceSamples) {
             const std::size_t cap = piece + kMaxPieceSamples;
