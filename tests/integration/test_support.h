@@ -45,7 +45,7 @@ inline std::optional<std::filesystem::path> model_file(const std::string& id,
     throw std::logic_error("no registry entry with id \"" + id + "\" and role \"" + role + "\"");
 }
 
-// tests/fixtures/<name>.wav, then build/fixtures/<name>.wav (tools/make-fixtures.sh).
+// tests/fixtures/<name>.wav, then build/fixtures/<name>.wav (tools/make-fixtures.py).
 inline std::optional<std::filesystem::path> fixture(const std::string& name) {
     for (const char* sub : {"tests/fixtures", "build/fixtures"}) {
         auto path = source_dir() / sub / (name + ".wav");

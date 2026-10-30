@@ -1,0 +1,87 @@
+# Linux x64 build and tests. GCC + Ninja, preset linux-cpu. Mirrors windows.yml: the unit and
+# integration tests run, and so do the e2e cases with the models fetched by tools/fetch-models.sh
+# and cached. A case whose model is missing skips; the Qwen 1.7B case does not fetch its 2.2 GB
+# model here and skips.
+name: linux
+
+on:
+  push:
+    branches: [main, "ci/**"]
+    paths-ignore: &unbuilt
+      - "**.md"
+      - "docs/**"
+      - "LICENSE"
+      - "THIRD_PARTY_NOTICES"
+      - "bindings/csharp/**"
+      - "tools/package-*"
+      - ".github/workflows/release.yml"
+  pull_request:
+    paths-ignore: *unbuilt
+  workflow_dispatch:
+
+concurrency:
+  group: linux-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  cpu-x64:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install build tools
+        run: sudo apt-get update && sudo apt-get install -y ninja-build
+
+      - name: Tool versions
+        run: |
+          cmake --version
+          ninja --version
+          g++ --version | head -1
+
+      - name: Cache models
+        uses: actions/cache@v4
+        with:
+          path: |
+            models/*.bin
+            models/*.gguf
+          key: models-${{ hashFiles('models/registry.json') }}-e2e
+
+      - name: Fetch models
+        run: tools/fetch-models.sh whisper-tiny-en whisper-large-v3-turbo-q5_0 silero-v6.2.0 qwen3-asr-0.6b-q8_0 firered-vad-v1
+
+      - name: Compiler cache
+        uses: hendrikmuhs/ccache-action@v1.2
+        with:
+          key: linux-cpu
+          max-size: 2G
+
+      - name: Configure
+        run: >-
+          cmake --preset linux-cpu
+          -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
+
+      - name: Build
+        run: cmake --build --preset linux-cpu
+
+      - name: Compiler cache stats
+        run: ccache -s
+
+      # The generated fixtures (runon_en, silence_30s) come from the committed clips with
+      # the stdlib only.
+      - name: Generated fixtures
+        run: python3 -I tools/make-fixtures.py
+
+      # -V prints every test's output, so the doctest summary and the SKIP lines are visible.
+      - name: Test
+        run: ctest --preset linux-cpu -V
+
+      - name: Upload test log
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: linux-cpu-testlog
+          path: build/linux-cpu/Testing/Temporary/LastTest.log
+          if-no-files-found: ignore

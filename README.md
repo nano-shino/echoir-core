@@ -128,8 +128,8 @@ tools\package-windows.ps1 -Preset windows-vulkan-x64
 The build puts `echoir.exe`, `echoir.dll` and one copy of each ggml DLL in `build\<preset>\bin`.
 `tools\package-windows.ps1` zips them, with `models\registry.json` and a README, into
 `dist\echoir-<version>-<preset>.zip`. The zip runs from any folder. Model files are not in it.
-Most e2e cases use fixtures that `tools/make-fixtures.sh` makes, and that script runs only on macOS.
-On Windows those cases skip: with the models in `models\`, 13 of the 49 e2e cases run and pass.
+The e2e cases use committed speech clips and the fixtures that `tools/make-fixtures.py` makes. Cases
+whose model is not in `models\` skip.
 
 Build options:
 
@@ -173,9 +173,8 @@ If a FireRedVAD file is not hosted, `fetch-models.sh` downloads the upstream che
 converts them with `tools/convert-firered-vad.py`, which needs only Python 3. The Windows script
 prints the same commands instead.
 
-`tools/make-fixtures.sh` generates the longer test audio into `build/fixtures/`. It runs on macOS
-and needs `say`, `afconvert` and `python3`. The Windows CI job writes only the silent fixture
-itself, with the Python standard library.
+`python3 -I tools/make-fixtures.py` builds the generated test audio into `build/fixtures/`. It uses
+the Python standard library only and runs on any host.
 
 ## Command line
 
@@ -212,8 +211,8 @@ The [command-line reference](docs/cli.md) describes every option and output form
   case whose model files or fixture are not on disk is reported as skipped. The runner is
   `tests/e2e/run_e2e.py`, which needs Python 3 and only its standard library. The cases exist only
   when CMake finds Python and the command-line tool is built (`ECHOIR_WITH_WHISPER=ON`).
-- `long_session` (label `long`): the long-session cases, about ten minutes of audio each. Run it by
-  name, for example `ctest --preset macos-cpu -R long_session`.
+- `qwen_stream_golden` (label `long`): the Qwen streaming cases on real models, about 100 s. Run it by
+  name, for example `ctest --preset macos-cpu -R qwen_stream_golden`.
 - `stress_live` (labels `long` and `stress`): a 60 s live-mode stress run on scripted backends, with
   no models. It runs under `macos-tsan`.
 

@@ -5,9 +5,10 @@ is also 16 kHz mono f32, so tests can feed these files without resampling.
 
 Each WAV has a `.ref.txt` next to it with the text that was spoken. Non-speech
 files have an empty `.ref.txt`. The exception is `firered/tone_noise.wav`, a
-synthetic clip in a subdirectory, which has no `.ref.txt`. Reference texts are
-plain text as given to the TTS, with no normalization. Compare them after
-lowercasing and stripping punctuation.
+synthetic clip in a subdirectory, which has no `.ref.txt`. A speech reference
+is a person's transcript of the clip, checked against the audio, with the
+spoken fillers kept. Compare references after lowercasing and stripping
+punctuation, as the scorer does.
 
 ## Committed (this directory)
 
@@ -17,42 +18,37 @@ lowercasing and stripping punctuation.
 | `jfk.ref.txt` | | "And so, my fellow Americans, ask not what your country can do for you, ask what you can do for your country." |
 | `prompt_echo.wav` | 12.97 s | A recording contributed by the author. Two short lines of dialogue over background sound, which fades out from 9.5 s; nothing is said after the second line. With `--language en`, Qwen3-ASR streaming used to decode the last sound as its prompt history, repeating both lines. The converted clip still does this without the guard. |
 | `prompt_echo.ref.txt` | | "Or am I wrong? Understood, sir." The last sound is not in it. |
+| `pd_nasa_ep407.wav` | 33.31 s | An excerpt of NASA's "Houston We Have a Podcast" episode 407. American English. |
+| `pd_nasa_ep345.wav` | 27.72 s | An excerpt of "Houston We Have a Podcast" episode 345, "The Lost Universe". American English. |
+| `pd_nasa_ep180.wav` | 25.64 s | An excerpt of "Houston We Have a Podcast" episode 180, about Artemis flight tests. American English. |
+| `pd_voa.wav` | 31.54 s | An excerpt of a Voice of America interview with the singer Alessia Cara at Jingle Ball 2016. American English, emotional and conversational, with background noise from the event. |
+| `pd_*.ref.txt` | | The transcript of each clip above. |
 | `firered/` | | Golden outputs of the FireRedVAD implementation, computed by the upstream Apache-2.0 code and weights. See `firered/README.md`. |
 | `firered/tone_noise.wav` | 3.00 s | Synthetic: silence, a 440 Hz tone, then white noise. No `.ref.txt`, since it is not speech. |
 
-Keep the committed fixtures small: the limit is 2 MB in total.
+The `pd_*` clips are public domain: NASA works and Voice of America recordings are
+U.S. government works. Each clip is a 25 to 33 second excerpt, cut at a segment
+boundary and converted to 16 kHz mono. Each transcript was drafted with
+`whisper-large-v3-turbo-q5_0` and then checked by a person against the audio,
+with `qwen3-asr-1.7b-q8_0` used to find the words the two models disagree on.
+
+Keep the committed fixtures small: the limit is 10 MB in total.
 
 ## Generated (not committed)
 
-Run `tools/make-fixtures.sh` (macOS, needs `say`, `afconvert` and `python3`) to
-write these into `build/fixtures/`. With the same voices, every run writes the
-same bytes. Runs must not overlap: a second run exits with an error while the
-first one holds the lock in `build/fixtures/.lock`. A run builds the files in
-`build/fixtures/.lock/work` and moves them into place only after all of them
-succeeded, so a failed run leaves the previous set untouched. A killed run (for
-example `kill -9`) leaves only `build/fixtures/.lock`; the next run sees that its
-owner pid is gone, removes the lock with its work directory, and carries on.
-
-The script uses python3 only for its standard library (`wave`, `array`, `math`),
-run with `-I`. It needs no pip packages.
+Run `python3 -I tools/make-fixtures.py` to write these into `build/fixtures/`.
+It needs only the Python standard library (`wave`, `array`, `math`) and runs on
+any host. It reads the committed `pd_*` clips, so run it after a fresh checkout.
+Every run writes the same bytes. A run builds the files in a temporary
+directory inside `build/fixtures/` and moves them into place only after all of
+them succeeded.
 
 | File | Duration | How it is made |
 |---|---|---|
-| `short_en.wav` | 9.51 s | One sentence, `say` (Samantha). |
-| `sentences_en.wav` | 58.97 s | Five sentences, each rendered by `say` and trimmed, joined with exactly 1.0 s of silence. |
-| `runon_en.wav` | 46.81 s | Five unpunctuated `say` clips, trimmed and joined with no gap. A pause longer than 120 ms inside a clip is cut down to 120 ms, which changes nothing with Samantha (her longest pause is 100 ms) and keeps the default voice under the limit. The script measures the longest low-energy run and fails if it is over 200 ms. |
+| `runon_en.wav` | 32.04 s | `pd_nasa_ep407` with every pause longer than 120 ms cut down to 120 ms. The session cuts at a pause of at least 250 ms, so this clip has none and exercises the forced cut. The script fails if a pause over 200 ms remains. Ref is the ep407 transcript. |
 | `silence_30s.wav` | 30.00 s | Digital silence. Empty ref. |
-| `long_mix.wav` | 600.00 s | Exactly 10 min. Speech (`sentences_en`, `short_en`, `runon_en`), silence, and 440 Hz tone blocks (amplitude 0.3, 10 ms fades) in a fixed cycle, then silence padding. Its ref is the speech texts in order. |
-| `zh_short.wav` | 6.06 s | Chinese, `say` (Tingting, zh_CN). Skipped with a warning if no zh_ voice is installed. |
 
-Low-energy means a 10 ms frame with RMS below -40 dBFS. The run check uses the
+Low-energy means a 10 ms frame with RMS below -40 dBFS. The pause check uses the
 same definition.
 
-Voices are not part of the fixture contract. If Samantha is missing, the script
-uses the system default voice and prints a warning. The fallback was checked on
-this host with Samantha hidden from the voice list: the default voice's pauses
-are cut as described above, and `runon_en` comes out at about 52 s, still under
-the 200 ms pause limit.
-
-Do not hand-edit generated files. Change the texts or the logic in
-`tools/make-fixtures.sh` and re-run it.
+Do not hand-edit generated files. Change `tools/make-fixtures.py` and re-run it.

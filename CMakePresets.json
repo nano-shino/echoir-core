@@ -266,6 +266,21 @@
       }
     },
     {
+      "name": "linux-cpu",
+      "configurePreset": "linux-cpu",
+      "output": {
+        "outputOnFailure": true
+      },
+      "filter": {
+        "exclude": {
+          "label": "long"
+        }
+      },
+      "execution": {
+        "noTestsAction": "error"
+      }
+    },
+    {
       "name": "windows-cpu-x64",
       "configurePreset": "windows-cpu-x64",
       "output": {

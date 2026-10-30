@@ -18,8 +18,8 @@ namespace et = echoir::test;
 
 namespace {
 
-// runon_en has no pause, so a forced cut is searched in the 3 s before the cap, and a cut segment
-// is at least 17 s long.
+// runon_en has no pause over 120 ms, so a forced cut is searched in the 3 s before the cap, and a
+// cut segment is at least 17 s long.
 constexpr std::int64_t kMinCutSegmentMs = 17000;
 
 // The whole span as one speech range. The session then keeps its open segment running until the
@@ -35,18 +35,18 @@ public:
 
 }  // namespace
 
-TEST_CASE("stream session keeps its invariants on sentences_en with whisper") {
-    const auto fixture = et::fixture("sentences_en");
-    ECHOIR_REQUIRE_OR_SKIP(fixture, "sentences_en.wav fixture");
+TEST_CASE("stream session keeps its invariants on pd_nasa_ep180 with whisper") {
+    const auto fixture = et::fixture("pd_nasa_ep180");
+    ECHOIR_REQUIRE_OR_SKIP(fixture, "pd_nasa_ep180.wav fixture");
     auto engine = et::load_engine(et::kWhisper);
     ECHOIR_REQUIRE_OR_SKIP(engine, "whisper-tiny-en or silero-v6.2.0 model");
     const ea::PcmBuffer wav = ea::read_wav(*fixture);
     et::check_invariants(et::stream_all(*engine->asr, *engine->vad, wav), et::duration_ms_of(wav));
 }
 
-TEST_CASE("stream session keeps its invariants on sentences_en with qwen") {
-    const auto fixture = et::fixture("sentences_en");
-    ECHOIR_REQUIRE_OR_SKIP(fixture, "sentences_en.wav fixture");
+TEST_CASE("stream session keeps its invariants on pd_nasa_ep180 with qwen") {
+    const auto fixture = et::fixture("pd_nasa_ep180");
+    ECHOIR_REQUIRE_OR_SKIP(fixture, "pd_nasa_ep180.wav fixture");
     auto engine = et::load_engine(et::kQwen);
     ECHOIR_REQUIRE_OR_SKIP(engine, "qwen3-asr-0.6b-q8_0 or firered-vad-v1 model");
     const ea::PcmBuffer wav = ea::read_wav(*fixture);

@@ -1,6 +1,7 @@
 # Windows x64 build and tests. MSVC + Ninja, preset windows-cpu-x64.
-# Unit tests always run. Integration tests run with whisper-tiny-en and the Silero VAD, fetched by
-# tools/fetch-models.ps1 and cached; tests whose model is missing (Qwen) skip.
+# Unit and integration tests run, and so do the e2e cases. The models are fetched by
+# tools/fetch-models.ps1 and cached. A case whose model is missing skips; the Qwen 1.7B case does not
+# fetch its 2.2 GB model here and skips.
 name: windows
 
 on:
@@ -48,11 +49,11 @@ jobs:
           path: |
             models/*.bin
             models/*.gguf
-          key: models-${{ hashFiles('models/registry.json') }}-tiny-silero
+          key: models-${{ hashFiles('models/registry.json') }}-e2e
 
       - name: Fetch models
         shell: pwsh
-        run: tools/fetch-models.ps1 whisper-tiny-en silero-v6.2.0
+        run: tools/fetch-models.ps1 whisper-tiny-en whisper-large-v3-turbo-q5_0 silero-v6.2.0 qwen3-asr-0.6b-q8_0 firered-vad-v1
 
       - name: Compiler cache
         uses: hendrikmuhs/ccache-action@v1.2
@@ -73,10 +74,11 @@ jobs:
       - name: Compiler cache stats
         run: ccache -s
 
-      # The silence case needs a 30 s silent WAV and an empty reference. Only the stdlib is used.
-      - name: Silence fixture
+      # The generated fixtures (runon_en, silence_30s) come from the committed clips with
+      # the stdlib only.
+      - name: Generated fixtures
         shell: pwsh
-        run: python -I -c "import os, wave; os.makedirs('build/fixtures', exist_ok=True); w = wave.open('build/fixtures/silence_30s.wav', 'wb'); w.setnchannels(1); w.setsampwidth(2); w.setframerate(16000); w.writeframes(bytes(16000 * 2 * 30)); w.close(); open('build/fixtures/silence_30s.ref.txt', 'w').close()"
+        run: python -I tools/make-fixtures.py
 
       # -V prints every test's output, so the doctest summary and the SKIP lines are visible.
       - name: Test
