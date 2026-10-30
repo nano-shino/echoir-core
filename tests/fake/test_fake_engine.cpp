@@ -2,6 +2,7 @@
 // read: the engine is created from a models directory that does not exist.
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <string>
@@ -155,6 +156,75 @@ TEST_CASE("fake backend refuses the rollback policy, as Whisper does") {
     echoir_session_params params{};
     echoir_session_params_init(&params);
     params.stream_policy = ECHOIR_POLICY_ROLLBACK;
+    CHECK(echoir_session_create(engine, &params, nullptr, nullptr) == nullptr);
+    echoir_engine_free(engine);
+}
+
+TEST_CASE("fake session keeps its audio, its envelope and the mute through the C ABI") {
+    echoir_engine* engine = create_engine();
+    REQUIRE(engine != nullptr);
+    echoir_session_params params{};
+    echoir_session_params_init(&params);
+    params.retain_audio_ms = 1000;
+    echoir_session* session = echoir_session_create(engine, &params, nullptr, nullptr);
+    REQUIRE(session != nullptr);
+
+    // 1.5 s at 16 kHz, the last 500 ms muted.
+    const std::vector<float> pcm = speech(15 * kBlock);
+    REQUIRE(echoir_session_push_f32(session, pcm.data(), 10 * kBlock, kSampleRate, 1) == ECHOIR_OK);
+    REQUIRE(echoir_session_set_input_muted(session, 1) == ECHOIR_OK);
+    REQUIRE(echoir_session_push_f32(session, pcm.data() + 10 * kBlock, 5 * kBlock, kSampleRate,
+                                    1) == ECHOIR_OK);
+    REQUIRE(echoir_session_set_input_muted(session, 0) == ECHOIR_OK);
+
+    size_t n = 0;
+    REQUIRE(echoir_session_read_audio(session, 500, 2000, nullptr, 0, &n) == ECHOIR_OK);
+    CHECK(n == 1000 * 16);
+    std::vector<std::int16_t> audio(n);
+    REQUIRE(echoir_session_read_audio(session, 500, 2000, audio.data(), audio.size(), &n) ==
+            ECHOIR_OK);
+    CHECK(audio[0] == static_cast<std::int16_t>(std::lround(pcm[5 * kBlock] * 32768.0f)));
+    CHECK(
+        std::all_of(audio.begin() + 500 * 16, audio.end(), [](std::int16_t s) { return s == 0; }));
+    // The first 500 ms no longer fit in the 1 s kept.
+    CHECK(echoir_session_read_audio(session, 0, 100, nullptr, 0, &n) == ECHOIR_ERR_STATE);
+    CHECK(echoir_session_read_audio(session, 500, 2000, audio.data(), 10, &n) ==
+          ECHOIR_ERR_INVALID_ARG);
+
+    REQUIRE(echoir_session_read_peaks(session, 0, INT64_MAX, 10, nullptr, 0, &n) == ECHOIR_OK);
+    CHECK(n == 150);
+    std::vector<float> peaks(2 * 3);
+    REQUIRE(echoir_session_read_peaks(session, 0, 1500, 500, peaks.data(), 3, &n) == ECHOIR_OK);
+    CHECK(n == 3);
+    CHECK(peaks[1] > 0.29f);
+    CHECK(peaks[4] == 0.0f);
+    CHECK(peaks[5] == 0.0f);
+    CHECK(echoir_session_read_peaks(session, 0, 100, 15, nullptr, 0, &n) == ECHOIR_ERR_INVALID_ARG);
+
+    REQUIRE(echoir_session_reset(session) == ECHOIR_OK);
+    REQUIRE(echoir_session_read_peaks(session, 0, INT64_MAX, 10, nullptr, 0, &n) == ECHOIR_OK);
+    CHECK(n == 0);
+
+    echoir_session_free(session);
+    echoir_engine_free(engine);
+}
+
+TEST_CASE("fake session without retain_audio_ms keeps no audio") {
+    echoir_engine* engine = create_engine();
+    REQUIRE(engine != nullptr);
+    echoir_session_params params{};
+    echoir_session_params_init(&params);
+    echoir_session* session = echoir_session_create(engine, &params, nullptr, nullptr);
+    REQUIRE(session != nullptr);
+    const std::vector<float> pcm = speech(kBlock);
+    REQUIRE(echoir_session_push_f32(session, pcm.data(), pcm.size(), kSampleRate, 1) == ECHOIR_OK);
+    size_t n = 0;
+    CHECK(echoir_session_read_audio(session, 0, 100, nullptr, 0, &n) == ECHOIR_ERR_STATE);
+    CHECK(echoir_session_read_peaks(session, 0, 100, 10, nullptr, 0, &n) == ECHOIR_OK);
+    CHECK(n == 10);
+
+    params.retain_audio_ms = -1;
+    echoir_session_free(session);
     CHECK(echoir_session_create(engine, &params, nullptr, nullptr) == nullptr);
     echoir_engine_free(engine);
 }

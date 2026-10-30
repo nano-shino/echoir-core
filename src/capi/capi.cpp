@@ -148,6 +148,7 @@ void echoir_session_params_init(echoir_session_params* p) {
     p->min_chunk_ms = 500;      // 8000 samples (500 ms) of audio before a decode runs.
     p->max_segment_ms = 10000;  // Longest ongoing segment before a forced cut.
     p->emit_partials = 1;
+    p->retain_audio_ms = 0;
 }
 
 void echoir_model_params_init(echoir_model_params* p) {
@@ -376,11 +377,14 @@ echoir_status check_push_args(const char* fn, const void* pcm, size_t n_frames, 
 }
 
 // Reads the session settings from the struct a caller passed. A struct that ends after
-// emit_partials is accepted, and its stream_policy is the default. Throws std::invalid_argument for
-// a struct too small to include emit_partials, a struct from a newer header, and an unknown policy.
+// emit_partials is accepted, and the fields it does not cover take their defaults. Throws
+// std::invalid_argument for a struct too small to include emit_partials, a struct from a newer
+// header, an unknown policy, and a negative retain_audio_ms.
 echoir::SessionConfig session_config_from_abi(const echoir_session_params& params) {
     constexpr size_t kEndOfEmitPartials = offsetof(echoir_session_params, stream_policy);
     constexpr size_t kEndOfStreamPolicy = kEndOfEmitPartials + sizeof(params.stream_policy);
+    constexpr size_t kEndOfRetainAudio =
+        offsetof(echoir_session_params, retain_audio_ms) + sizeof(params.retain_audio_ms);
     if (params.struct_size < kEndOfEmitPartials) {
         throw std::invalid_argument("struct_size is smaller than the fields up to emit_partials");
     }
@@ -407,6 +411,12 @@ echoir::SessionConfig session_config_from_abi(const echoir_session_params& param
             default:
                 throw std::invalid_argument("stream_policy is not a known policy");
         }
+    }
+    if (params.struct_size >= kEndOfRetainAudio) {
+        if (params.retain_audio_ms < 0) {
+            throw std::invalid_argument("retain_audio_ms must not be negative");
+        }
+        config.retain_audio_ms = params.retain_audio_ms;
     }
     return config;
 }
@@ -616,6 +626,39 @@ echoir_status echoir_session_clear(echoir_session* s) {
     return run_session_call(s, "echoir_session_clear",
                             [](echoir::Session& session) { session.clear(); });
 }
+
+echoir_status echoir_session_read_audio(echoir_session* s, int64_t start_ms, int64_t end_ms,
+                                        int16_t* out, size_t cap, size_t* n_frames) {
+    const char* fn = "echoir_session_read_audio";
+    if (n_frames == nullptr) {
+        set_last_error(fn, "n_frames must not be NULL");
+        return ECHOIR_ERR_INVALID_ARG;
+    }
+    *n_frames = 0;
+    return run_session_call(s, fn, [&](echoir::Session& session) {
+        *n_frames = session.audio().read_audio(start_ms, end_ms, out, cap);
+    });
+}
+
+echoir_status echoir_session_read_peaks(echoir_session* s, int64_t start_ms, int64_t end_ms,
+                                        int32_t bucket_ms, float* out_minmax, size_t cap,
+                                        size_t* n_buckets) {
+    const char* fn = "echoir_session_read_peaks";
+    if (n_buckets == nullptr) {
+        set_last_error(fn, "n_buckets must not be NULL");
+        return ECHOIR_ERR_INVALID_ARG;
+    }
+    *n_buckets = 0;
+    return run_session_call(s, fn, [&](echoir::Session& session) {
+        *n_buckets = session.audio().read_peaks(start_ms, end_ms, bucket_ms, out_minmax, cap);
+    });
+}
+
+echoir_status echoir_session_set_input_muted(echoir_session* s, int32_t muted) {
+    return run_session_call(s, "echoir_session_set_input_muted", [muted](echoir::Session& session) {
+        session.set_input_muted(muted != 0);
+    });
+}
 #else
 // Without the engine no session can be created, so every session call reports that the backends
 // are missing.
@@ -663,4 +706,18 @@ echoir_status echoir_session_flush(echoir_session*) { return not_built("echoir_s
 echoir_status echoir_session_reset(echoir_session*) { return not_built("echoir_session_reset"); }
 
 echoir_status echoir_session_clear(echoir_session*) { return not_built("echoir_session_clear"); }
+
+echoir_status echoir_session_read_audio(echoir_session*, int64_t, int64_t, int16_t*, size_t,
+                                        size_t*) {
+    return not_built("echoir_session_read_audio");
+}
+
+echoir_status echoir_session_read_peaks(echoir_session*, int64_t, int64_t, int32_t, float*, size_t,
+                                        size_t*) {
+    return not_built("echoir_session_read_peaks");
+}
+
+echoir_status echoir_session_set_input_muted(echoir_session*, int32_t) {
+    return not_built("echoir_session_set_input_muted");
+}
 #endif

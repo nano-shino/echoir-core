@@ -190,7 +190,11 @@ void Session::State::drop_seam() {
 }
 
 Session::Session(IAsrBackend& backend, vad::IVad& vad, SessionConfig config, SessionSink sink)
-    : backend_(backend), vad_(vad), config_(std::move(config)), sink_(std::move(sink)) {
+    : backend_(backend),
+      vad_(vad),
+      config_(std::move(config)),
+      sink_(std::move(sink)),
+      store_(config_.retain_audio_ms) {
     if (config_.min_chunk_ms < 0) {
         throw std::invalid_argument("min_chunk_ms must not be negative");
     }
@@ -256,14 +260,18 @@ void Session::push(std::span<const float> interleaved, std::int32_t sample_rate,
             // A format change starts a new resampler. The old one's tail is written out first, so
             // the last samples of the old format are not lost.
             if (resampler_) {
+                const std::size_t from = pending_.size();
                 resampler_->flush(pending_);
+                take_in(from);
             }
             resampler_.emplace(static_cast<std::uint32_t>(sample_rate),
                                static_cast<std::uint32_t>(channels));
             rate_ = sample_rate;
             channels_ = channels;
         }
+        const std::size_t from = pending_.size();
         resampler_->push(interleaved, pending_);
+        take_in(from);
     }
     wake_worker();
 }
@@ -739,15 +747,27 @@ void Session::abandon_window(std::size_t taken, std::uint64_t generation) noexce
 void Session::drain_resampler() {
     std::lock_guard<std::mutex> audio(audio_mu_);
     if (resampler_) {
+        const std::size_t from = pending_.size();
         resampler_->flush(pending_);
         resampler_->reset();
+        take_in(from);
     }
+}
+
+void Session::take_in(std::size_t from) {
+    const auto begin = pending_.begin() + static_cast<std::ptrdiff_t>(from);
+    if (input_muted_.load()) {
+        std::fill(begin, pending_.end(), 0.0f);
+    }
+    store_.append(std::span<const float>(pending_).subspan(from));
 }
 
 void Session::drop_state() {
     {
         std::lock_guard<std::mutex> audio(audio_mu_);
         pending_.clear();
+        // The timeline restarts at 0, so the kept audio restarts with it.
+        store_.clear();
     }
     const std::int64_t next_id = state_.next_id;
     state_ = State{};

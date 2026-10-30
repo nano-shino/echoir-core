@@ -35,6 +35,7 @@ int main(void) {
     EXPECT(strcmp(sp.language, "auto") == 0);
     EXPECT(sp.min_chunk_ms == 500);
     EXPECT(sp.max_segment_ms == 10000);
+    EXPECT(sp.retain_audio_ms == 0);
 
     /* Engine and session create need a model; with no paths they return NULL. The fake build
        loads no model, so it has no such check. A NULL session is rejected before any session
@@ -46,6 +47,12 @@ int main(void) {
     EXPECT(echoir_session_poll(NULL, &ev) == ECHOIR_ERR_INVALID_ARG);
     EXPECT(echoir_session_start(NULL) == ECHOIR_ERR_INVALID_ARG);
     EXPECT(strstr(echoir_last_error(), "echoir_session_start") != NULL);
+    {
+        size_t n = 1;
+        EXPECT(echoir_session_read_audio(NULL, 0, 10, NULL, 0, &n) == ECHOIR_ERR_INVALID_ARG);
+        EXPECT(echoir_session_read_peaks(NULL, 0, 10, 10, NULL, 0, &n) == ECHOIR_ERR_INVALID_ARG);
+        EXPECT(echoir_session_set_input_muted(NULL, 1) == ECHOIR_ERR_INVALID_ARG);
+    }
 
     /* A session params struct from a newer header is refused, and so is an unknown policy. Both
        are checked before the engine, so they fail here with no engine. */

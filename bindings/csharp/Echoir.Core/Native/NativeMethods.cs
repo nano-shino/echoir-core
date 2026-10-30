@@ -55,6 +55,15 @@ internal static unsafe partial class NativeMethods
     [LibraryImport(Library, EntryPoint = "echoir_session_clear")]
     internal static partial int SessionClear(nint session);
 
+    [LibraryImport(Library, EntryPoint = "echoir_session_read_audio")]
+    internal static partial int SessionReadAudio(nint session, long startMs, long endMs, short* output, nuint cap, nuint* nFrames);
+
+    [LibraryImport(Library, EntryPoint = "echoir_session_read_peaks")]
+    internal static partial int SessionReadPeaks(nint session, long startMs, long endMs, int bucketMs, float* outMinMax, nuint cap, nuint* nBuckets);
+
+    [LibraryImport(Library, EntryPoint = "echoir_session_set_input_muted")]
+    internal static partial int SessionSetInputMuted(nint session, int muted);
+
     [LibraryImport(Library, EntryPoint = "echoir_devices_json")]
     internal static partial nint DevicesJson();
 

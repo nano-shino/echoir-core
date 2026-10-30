@@ -98,6 +98,10 @@ typedef struct {
   int32_t     max_segment_ms;          // default 10000
   int32_t     emit_partials;           // 1 = emit PARTIAL events for the ongoing segment (default)
   int32_t     stream_policy;           // echoir_stream_policy; default ECHOIR_POLICY_DEFAULT
+  // How many ms of the newest audio the session keeps for echoir_session_read_audio(), as 16 kHz
+  // mono 16-bit samples (about 1.9 MB per minute). Default 0: no audio is kept. The level envelope
+  // of echoir_session_read_peaks() is kept either way.
+  int32_t     retain_audio_ms;
 } echoir_session_params;
 
 // Kind of an echoir_event.
@@ -226,6 +230,40 @@ ECHOIR_API echoir_status  echoir_session_reset(echoir_session*);
 // Drops the in-flight transcript text and emits ECHOIR_EVENT_CLEARED on the calling thread.
 // Timestamps keep running. Use echoir_session_reset() to start the timeline over.
 ECHOIR_API echoir_status  echoir_session_clear(echoir_session*);
+
+// Audio store, level envelope and input mute. The session keeps the audio it takes in, after
+// conversion to 16 kHz mono, on the session timeline: the same milliseconds as the event times,
+// including the silence pushed for capture gaps, and restarting at 0 with echoir_session_reset().
+// The store lives until the session is freed, so it can be read after echoir_session_stop(). These
+// calls are thread-safe and may run on any thread, in any mode.
+
+// Copies the kept audio of [start_ms, end_ms) as 16 kHz mono 16-bit samples into out, which holds
+// cap samples, and sets *n_frames to the number copied. end_ms is clamped to the newest sample, so
+// a range past it is shorter, or empty. With out NULL, only *n_frames is set: the number the range
+// needs. Returns ECHOIR_ERR_STATE when the session keeps no audio (retain_audio_ms 0), or when any
+// part of the range is older than what is kept. Returns ECHOIR_ERR_INVALID_ARG for a negative
+// start_ms, end_ms before start_ms, n_frames NULL, or a cap too small for the range.
+ECHOIR_API echoir_status  echoir_session_read_audio(echoir_session*, int64_t start_ms,
+                                                    int64_t end_ms, int16_t* out, size_t cap,
+                                                    size_t* n_frames);
+
+// The level envelope of [start_ms, end_ms): one min/max pair (full scale ±1) per bucket of
+// bucket_ms, a positive multiple of 10. The envelope keeps one pair per 10 ms for the whole
+// session. out_minmax holds 2 floats per bucket, min then max, for cap buckets, and *n_buckets is
+// set to the number written. end_ms is clamped to the newest whole 10 ms, and the last bucket may
+// be shorter. With out_minmax NULL, only *n_buckets is set: the number the range needs. The count
+// over [0, INT64_MAX) at bucket_ms 10 is the envelope's length in 10 ms steps, and its newest
+// bucket is the input level. Returns ECHOIR_ERR_INVALID_ARG for a bad bucket_ms, a negative start_ms, end_ms before
+// start_ms, n_buckets NULL, or a cap too small for the range.
+ECHOIR_API echoir_status  echoir_session_read_peaks(echoir_session*, int64_t start_ms,
+                                                    int64_t end_ms, int32_t bucket_ms,
+                                                    float* out_minmax, size_t cap,
+                                                    size_t* n_buckets);
+
+// muted 1: audio entering the session, pushed or captured, is replaced by silence of the same
+// length, so the timeline keeps running and the VAD ends the ongoing segment. The store keeps the
+// silence. muted 0 resumes. Takes effect from the next audio the session converts.
+ECHOIR_API echoir_status  echoir_session_set_input_muted(echoir_session*, int32_t muted);
 
 // Capture. The library opens an audio device and pushes its audio into a session in live mode.
 // The device's samples are read on a library thread, so the host only starts and stops it.
