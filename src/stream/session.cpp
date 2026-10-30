@@ -53,8 +53,10 @@
 //
 // Seam. The segment that starts within kSeamMs (0.5 s) of a forced cut differs from other
 // segments in two ways, in each of its decodes, PARTIAL and FINAL:
-//   1. No history. The latest final can end mid-sentence at the cut, and a decoder given it as
-//      history writes words from it for the audio after the cut. So the echo check is skipped too.
+//   1. History. The audio before the cut can end mid-sentence, and a decoder given the usual
+//      history writes words from it for the audio after the cut. So the history is only the FINAL
+//      before the cut when the backend's history_at_cut() is true (Qwen3-ASR), and none otherwise
+//      (Whisper). The echo check is skipped.
 //   2. A cut can still split a word, and a decoder then writes that word on both sides of the cut.
 //      So up to 3 leading words that repeat the last words of the FINAL before the cut are
 //      dropped (text::drop_seam_repeat). Speech can repeat a word across a pause, so this never
@@ -549,12 +551,16 @@ std::size_t Session::analyze(const std::vector<float>& window, bool finish, std:
         const bool at_seam =
             st.seam_ms >= 0 && abs_start >= st.seam_ms && abs_start <= st.seam_ms + kSeamMs;
         const std::vector<std::string> no_history;
+        std::vector<std::string> seam_history;
+        if (at_seam && backend_.history_at_cut() && !st.seam_text.empty()) {
+            seam_history.push_back(utf32_to_utf8(st.seam_text));
+        }
         // Rollback: decode n of the ongoing segment continues from decode n-1, and the first
         // unfixed_decodes decodes start from nothing. A final is decoded alone, because the
         // continuation came from a decode that heard audio past the segment's end.
         DecodeRequest request{
             std::span<const float>(window.data() + start, static_cast<std::size_t>(end - start)),
-            at_seam ? no_history : st.prompts, config_.language, config_.context};
+            at_seam ? seam_history : st.prompts, config_.language, config_.context};
         if (rollback && ongoing && st.open_decodes >= config_.unfixed_decodes) {
             request.prefix = st.continuation;
             request.rollback_tokens = config_.rollback_tokens;
