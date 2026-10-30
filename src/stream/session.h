@@ -157,8 +157,13 @@ private:
         // decode of it starts from. Both are empty or zero when no segment is ongoing.
         int open_decodes = 0;
         std::string continuation;
-        // The clear() generation that the continuation was decoded under. clear() makes it stale.
-        std::uint64_t continuation_generation = 0;
+        // The latest FINAL, when it ended at a forced cut, and the cut in session ms. The segment
+        // that starts at the cut drops its leading words that repeat it. Empty and -1 otherwise.
+        std::u32string seam_text;
+        std::int64_t seam_ms = -1;
+        // The clear() generation that the continuation and the seam were decoded under. clear()
+        // makes both stale.
+        std::uint64_t decoded_generation = 0;
 
         // The FINAL that ends the ongoing segment: its newest decode, which a finish sends. Empty
         // when there is no ongoing segment, or when it has no text and no PARTIAL was shown.
@@ -167,6 +172,7 @@ private:
         void close_open();
         // Forgets the continuation, so the next decode of the ongoing segment starts over.
         void drop_continuation();
+        void drop_seam();
     };
 
     // Runs one tick. Returns true when the tick took pending audio, and false when there was

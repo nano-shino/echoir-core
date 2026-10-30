@@ -21,6 +21,9 @@ struct ErrorRate {
 // "dont". Digits, letters and marks are kept.
 std::string normalize_for_score(std::string_view utf8);
 
+// True for the code points that normalize_for_score turns into a word break.
+bool is_score_space(char32_t c);
+
 // Levenshtein alignment over normalized units. A unit is a word, except that each CJK, kana or
 // Hangul code point is its own unit.
 ErrorRate error_rate(std::string_view hyp_utf8, std::string_view ref_utf8);
