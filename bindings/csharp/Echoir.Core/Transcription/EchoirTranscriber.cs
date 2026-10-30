@@ -13,6 +13,12 @@ public sealed class EchoirTranscriber : IDisposable, IAsyncDisposable
 {
     private const int PollIntervalMs = 33;
 
+    // The envelope keeps one min/max pair per this many ms, so its count is in steps of it.
+    private const int PeakStepMs = 10;
+
+    // The window that Level reads.
+    private const int LevelWindowMs = 50;
+
     // Guards the engine, the session and every call into the session. Never held while the
     // delivery lock is taken or user code runs.
     private readonly object _native = new();
@@ -31,6 +37,10 @@ public sealed class EchoirTranscriber : IDisposable, IAsyncDisposable
     private SessionHandle? _session;
     private AudioSource _source;
     private bool _running;
+    private bool _inputMuted;
+
+    // The RetainAudio of the current session, in ms. Read with the session, under _native.
+    private int _retainAudioMs;
     private Poller? _poller;
     private SynchronizationContext? _context;
     private bool _disposed;
@@ -59,6 +69,58 @@ public sealed class EchoirTranscriber : IDisposable, IAsyncDisposable
             lock (_native)
             {
                 return _running;
+            }
+        }
+    }
+
+    // The loudest sample of the newest 50 ms, as a fraction of full scale. Zero with no session or
+    // no audio yet.
+    public float Level
+    {
+        get
+        {
+            lock (_native)
+            {
+                if (_session is null)
+                {
+                    return 0;
+                }
+                IntPtr handle = _session.DangerousGetHandle();
+                long newest = EnvelopeEndLocked(handle);
+                if (newest == 0)
+                {
+                    return 0;
+                }
+                Peak[] window = PeaksLocked(handle, Math.Max(0, newest - LevelWindowMs), newest, LevelWindowMs);
+                return window.Length == 0 ? 0 : Math.Max(Math.Abs(window[0].Min), Math.Abs(window[0].Max));
+            }
+        }
+    }
+
+    // Replaces the audio entering the session with silence of the same length, so the timeline
+    // keeps running and the VAD ends the ongoing segment. The silence is kept like any audio. Set
+    // it while running: it is ignored otherwise, and it is cleared when the transcriber stops.
+    public bool InputMuted
+    {
+        get
+        {
+            lock (_native)
+            {
+                return _inputMuted;
+            }
+        }
+        set
+        {
+            lock (_native)
+            {
+                if (!_running || _session is null)
+                {
+                    return;
+                }
+                EchoirException.ThrowIfFailed(
+                    NativeMethods.SessionSetInputMuted(_session.DangerousGetHandle(), value ? 1 : 0),
+                    "echoir_session_set_input_muted");
+                _inputMuted = value;
             }
         }
     }
@@ -148,6 +210,7 @@ public sealed class EchoirTranscriber : IDisposable, IAsyncDisposable
             // stopped one goes first.
             ReleaseSessionLocked();
             _session = CreateSession(_engine, options);
+            _retainAudioMs = RetainAudioMs(options);
             Volatile.Write(ref _context, context);
 
             int status;
@@ -252,6 +315,83 @@ public sealed class EchoirTranscriber : IDisposable, IAsyncDisposable
         Notify();
     }
 
+    // Copies the audio of a segment as 16 kHz mono samples, with padMs of audio before and after
+    // it. The padding is cut short at the start of the timeline and where the session no longer
+    // keeps audio (RetainAudio). Returns false, with an empty array, when the session keeps no
+    // audio, or when the audio of the segment itself is gone.
+    public unsafe bool TryReadAudio(Segment segment, out short[] samples, int padMs = 150)
+    {
+        ArgumentOutOfRangeException.ThrowIfNegative(padMs);
+        samples = Array.Empty<short>();
+        lock (_native)
+        {
+            if (_session is null || _retainAudioMs == 0)
+            {
+                return false;
+            }
+            IntPtr handle = _session.DangerousGetHandle();
+            long newest = EnvelopeEndLocked(handle);
+            // The store keeps the newest _retainAudioMs. The envelope counts whole steps, so its
+            // newest end can be up to one step behind the audio, and the oldest kept ms is taken
+            // as one step later. The estimate is never older than the store, so the core does not
+            // evict a part that is read here.
+            long oldest = newest + PeakStepMs - _retainAudioMs;
+            long start = Math.Max(Math.Max(segment.StartMs - padMs, oldest), 0);
+            if (start > segment.StartMs || segment.StartMs >= newest)
+            {
+                return false;
+            }
+            long end = Math.Max(start, Math.Min(segment.EndMs + padMs, newest));
+
+            nuint frames;
+            int status = NativeMethods.SessionReadAudio(handle, start, end, null, 0, &frames);
+            if (status == NativeValues.StatusState)
+            {
+                return false;
+            }
+            EchoirException.ThrowIfFailed(status, "echoir_session_read_audio");
+            if (frames == 0)
+            {
+                return true;
+            }
+
+            var copy = new short[(int)frames];
+            nuint copied;
+            fixed (short* pcm = copy)
+            {
+                status = NativeMethods.SessionReadAudio(handle, start, end, pcm, frames, &copied);
+            }
+            if (status == NativeValues.StatusState)
+            {
+                return false;
+            }
+            EchoirException.ThrowIfFailed(status, "echoir_session_read_audio");
+            samples = copy;
+            return true;
+        }
+    }
+
+    // The level envelope of [startMs, endMs): the min and max of each bucket of bucketMs, which is
+    // a positive multiple of 10. The end is clamped to the newest whole 10 ms, and the last bucket
+    // may be shorter. Empty when there is no session.
+    public Peak[] ReadPeaks(long startMs, long endMs, int bucketMs)
+    {
+        lock (_native)
+        {
+            if (_session is null)
+            {
+                return Array.Empty<Peak>();
+            }
+            IntPtr handle = _session.DangerousGetHandle();
+            // The end is clamped here, not by the core, so the count and the copy below cover the
+            // same buckets even while a capture adds audio. An end before the start is passed on
+            // unchanged, and the core rejects it.
+            long newest = EnvelopeEndLocked(handle);
+            long clampedEnd = endMs < startMs ? endMs : Math.Max(startMs, Math.Min(endMs, newest));
+            return PeaksLocked(handle, startMs, clampedEnd, bucketMs);
+        }
+    }
+
     public void Dispose()
     {
         if (_disposed)
@@ -323,6 +463,7 @@ public sealed class EchoirTranscriber : IDisposable, IAsyncDisposable
         }
         status = NativeMethods.SessionStop(handle);
         _running = false;
+        _inputMuted = false;
         CollectLocked();
 
         Poller? poller = _poller;
@@ -543,6 +684,7 @@ public sealed class EchoirTranscriber : IDisposable, IAsyncDisposable
         parameters.MaxSegmentMs = options.MaxSegmentMs;
         parameters.EmitPartials = options.EmitPartials ? 1 : 0;
         parameters.StreamPolicy = (int)options.Policy;
+        parameters.RetainAudioMs = RetainAudioMs(options);
 
         nint session = NativeMethods.SessionCreate(engine.DangerousGetHandle(), &parameters, 0, 0);
         if (session == 0)
@@ -550,6 +692,56 @@ public sealed class EchoirTranscriber : IDisposable, IAsyncDisposable
             throw EchoirException.FromLastError(EchoirStatus.InvalidArgument, "echoir_session_create");
         }
         return new SessionHandle(engine, session);
+    }
+
+    // The RetainAudio option in ms, as the core takes it.
+    private static int RetainAudioMs(TranscriberOptions options)
+    {
+        double ms = options.RetainAudio.TotalMilliseconds;
+        if (ms < 0 || ms > int.MaxValue)
+        {
+            throw new ArgumentOutOfRangeException(
+                nameof(options), "RetainAudio must be from zero to int.MaxValue milliseconds.");
+        }
+        return (int)ms;
+    }
+
+    // Lock held. The end of the level envelope in ms: its count of 10 ms steps. Zero before any
+    // audio.
+    private static unsafe long EnvelopeEndLocked(IntPtr session)
+    {
+        nuint steps;
+        int status = NativeMethods.SessionReadPeaks(session, 0, long.MaxValue, PeakStepMs, null, 0, &steps);
+        EchoirException.ThrowIfFailed(status, "echoir_session_read_peaks");
+        return (long)steps * PeakStepMs;
+    }
+
+    // Lock held. The envelope of [startMs, endMs) in buckets of bucketMs. The end must not be past
+    // EnvelopeEndLocked, so the copy has the buckets that the count gave.
+    private static unsafe Peak[] PeaksLocked(IntPtr session, long startMs, long endMs, int bucketMs)
+    {
+        nuint buckets;
+        int status = NativeMethods.SessionReadPeaks(session, startMs, endMs, bucketMs, null, 0, &buckets);
+        EchoirException.ThrowIfFailed(status, "echoir_session_read_peaks");
+        if (buckets == 0)
+        {
+            return Array.Empty<Peak>();
+        }
+
+        var raw = new float[2 * (int)buckets];
+        nuint written;
+        fixed (float* pairs = raw)
+        {
+            status = NativeMethods.SessionReadPeaks(session, startMs, endMs, bucketMs, pairs, buckets, &written);
+        }
+        EchoirException.ThrowIfFailed(status, "echoir_session_read_peaks");
+
+        var peaks = new Peak[(int)written];
+        for (int i = 0; i < peaks.Length; i++)
+        {
+            peaks[i] = new Peak(raw[2 * i], raw[2 * i + 1]);
+        }
+        return peaks;
     }
 
     private enum NotificationKind

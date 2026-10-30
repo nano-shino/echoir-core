@@ -14,6 +14,7 @@ internal struct SessionParams
     public int MaxSegmentMs;
     public int EmitPartials;
     public int StreamPolicy;
+    public int RetainAudioMs;
 }
 
 [StructLayout(LayoutKind.Sequential)]
@@ -48,6 +49,8 @@ internal static class NativeValues
     internal const int EventFinal = 2;
     internal const int EventCleared = 3;
     internal const int EventError = 4;
+
+    internal const int StatusState = 4;
 
     internal const int SourceMic = 1;
     internal const int SourceLoopback = 2;

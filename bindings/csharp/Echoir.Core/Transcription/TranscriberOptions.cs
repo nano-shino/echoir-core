@@ -41,6 +41,11 @@ public sealed record TranscriberOptions
     public bool EmitPartials { get; init; } = true;
 
     public StreamPolicy Policy { get; init; } = StreamPolicy.Default;
+
+    // How much of the newest audio the session keeps for TryReadAudio, as 16 kHz mono (about
+    // 1.9 MB a minute). Zero keeps none. The level envelope behind ReadPeaks and Level is kept
+    // either way.
+    public TimeSpan RetainAudio { get; init; } = TimeSpan.Zero;
 }
 
 // An error from the session, such as a lost device. DeviceLost is true for "device_lost".

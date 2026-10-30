@@ -11,6 +11,11 @@
 //
 // Timestamps are milliseconds from the start of the session or from the last reset.
 //
+// The session keeps the audio it takes in, after conversion to 16 kHz mono (see AudioStore): the
+// newest retain_audio_ms of samples and a level envelope of the whole timeline, for hosts that
+// show or replay it. Both restart with the timeline at reset(). Input can be muted: muted audio is
+// replaced by silence of the same length, so the timeline keeps running.
+//
 // Two ways to drive a session, and a session uses only one of them:
 //  - pull: the caller runs process() on its own thread, and sinks run on that thread.
 //  - live: start() launches one worker thread, which decodes as audio arrives. The worker runs
@@ -24,6 +29,7 @@
 // a sink only push() may be called: the other session calls throw StateError.
 #pragma once
 
+#include <atomic>
 #include <condition_variable>
 #include <cstddef>
 #include <cstdint>
@@ -38,6 +44,7 @@
 #include "audio/resampler.h"
 #include "backends/asr_backend.h"
 #include "echoir/echoir.h"
+#include "stream/audio_store.h"
 #include "text/stabilizer.h"
 #include "vad/vad.h"
 
@@ -64,6 +71,8 @@ struct SessionConfig {
     // each later one drops rollback_tokens tokens from the end of the previous output.
     int unfixed_decodes = 2;
     int rollback_tokens = 5;
+    // How much of the newest audio is kept for read_audio(). 0 keeps none.
+    std::int64_t retain_audio_ms = 0;
 };
 
 // One event. Times are milliseconds from the start of the session or from the last reset. The
@@ -85,8 +94,8 @@ class Session {
 public:
     // Throws std::invalid_argument if min_chunk_ms is negative, if max_segment_ms is below 200 (the
     // quietest-point search needs room for a 100 ms block), if unfixed_decodes or rollback_tokens
-    // is negative, if the policy is rollback and the backend has no prefix support, or if sink is
-    // empty.
+    // is negative, if retain_audio_ms is negative, if the policy is rollback and the backend has no
+    // prefix support, or if sink is empty.
     Session(IAsrBackend& backend, vad::IVad& vad, SessionConfig config, SessionSink sink);
     // Stops the worker, if one runs. Destroying the session from its own sink aborts the process:
     // the worker would keep running on members that are already gone.
@@ -138,6 +147,14 @@ public:
     // capture device. It is serialized with the other events, so it never runs with them at the
     // same time. Thread-safe. Throws nothing. Not from a sink.
     void report_error(const std::string& message) noexcept;
+
+    // While muted, the audio of push() is replaced by silence of the same length after conversion,
+    // so the VAD ends the ongoing segment and timestamps keep running. Thread-safe.
+    void set_input_muted(bool muted) noexcept { input_muted_.store(muted); }
+
+    // The kept audio and its envelope, on the session timeline. See AudioStore. Thread-safe, also
+    // from a sink and after stop().
+    const stream::AudioStore& audio() const noexcept { return store_; }
 
 private:
     enum class Mode { unset, pull, live };
@@ -198,6 +215,9 @@ private:
     // otherwise wait on a lock that the sink's own call still holds.
     void refuse_from_sink(const char* call) const;
     void drain_resampler();
+    // Mutes and stores the samples that a conversion appended to pending_ from index `from`.
+    // Caller holds audio_mu_.
+    void take_in(std::size_t from);
     void drop_state();
     // The worker's body: waits for a wake-up, then ticks while ticks take audio.
     void worker_loop(std::uint64_t run);
@@ -215,7 +235,8 @@ private:
     std::int64_t max_segment_samples_ = 0;
 
     // Lock order: lifecycle_mu_, decode_mu_, worker_mu_, then audio_mu_ or text_mu_. audio_mu_ and
-    // text_mu_ are never held together. worker_mu_ is never held across a decode.
+    // text_mu_ are never held together. worker_mu_ is never held across a decode. The store's own
+    // lock is taken last, under audio_mu_ or alone.
     std::mutex lifecycle_mu_;  // start and stop, so the worker handle is changed by one caller
     std::mutex decode_mu_;     // held for a whole tick by process, flush, reset and the worker
     std::mutex audio_mu_;      // pending_ and resampler_; push holds it only while converting
@@ -228,6 +249,8 @@ private:
     std::int32_t channels_ = 0;                  // audio_mu_
     std::vector<float> pending_;                 // audio_mu_: 16 kHz mono, not yet ticked
     std::uint64_t generation_ = 0;               // text_mu_: bumped by clear()
+    stream::AudioStore store_;                   // written under audio_mu_, read under its own lock
+    std::atomic<bool> input_muted_{false};
 
     std::vector<float> carry_;         // decode_mu_: audio carried into the next tick
     std::int64_t origin_samples_ = 0;  // decode_mu_: session time of carry_[0], in samples
