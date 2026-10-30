@@ -314,6 +314,70 @@ TEST_CASE("session: a long range that is not the last is cut at the limit too") 
           std::vector<Range>{{0, 272800}, {272800, 336000}, {352000, 360000}});
 }
 
+// Text for the speech of the forced-cut cases: the segment from 1 s ends with "we", and the
+// remainder after its cut at 288800 starts with it again.
+std::string seam_text(std::int64_t start, std::int64_t end) {
+    if (start == 16000) {
+        return "We drove down the road, we.";
+    }
+    if (start == 288800) {
+        return "We spent the night.";
+    }
+    return FakeBackend::span_text(start, end);
+}
+
+std::vector<std::string> texts_of(const std::vector<SessionEvent>& events, echoir_event_type type) {
+    std::vector<std::string> out;
+    for (const SessionEvent& ev : events) {
+        if (ev.type == type) {
+            out.push_back(ev.text);
+        }
+    }
+    return out;
+}
+
+TEST_CASE("session: the segment after a forced cut drops the words that repeat the cut FINAL") {
+    Rig rig(cap_20s_config());
+    rig.backend.text_for = seam_text;
+    rig.vad.speech = {{0, 8000}, {16000, 400000}};
+    rig.push_ms(22500);
+    rig.session().process();  // cut at 288800
+    rig.push_ms(1000);
+    rig.session().process();  // the remainder is ongoing
+    rig.session().flush();
+
+    CHECK(texts_of(rig.events, ECHOIR_EVENT_PARTIAL) == std::vector<std::string>{"spent the night."});
+    CHECK(texts_of(rig.events, ECHOIR_EVENT_FINAL) ==
+          std::vector<std::string>{"[0,8000)", "We drove down the road, we.", "spent the night."});
+}
+
+TEST_CASE("session: a word repeated across a VAD boundary is kept") {
+    Rig rig;
+    rig.backend.text_for = [](std::int64_t start, std::int64_t) {
+        return std::string(start == 8000 ? "No," : "no, stop.");
+    };
+    rig.vad.speech = {{8000, 40000}, {48000, 80000}};  // 0.5 s apart
+    rig.push_ms(6000);
+    rig.session().process();
+    rig.session().flush();
+
+    CHECK(texts_of(rig.events, ECHOIR_EVENT_FINAL) == std::vector<std::string>{"No,", "no, stop."});
+}
+
+TEST_CASE("session: a clear after a forced cut drops the seam") {
+    Rig rig(cap_20s_config());
+    rig.backend.text_for = seam_text;
+    rig.vad.speech = {{0, 8000}, {16000, 360000}};
+    rig.push_ms(22500);
+    rig.session().process();  // cut at 288800
+    rig.session().clear();
+    rig.session().flush();
+
+    const std::vector<std::string> finals = texts_of(rig.events, ECHOIR_EVENT_FINAL);
+    REQUIRE(finals.size() == 3);
+    CHECK(finals[2] == "We spent the night.");
+}
+
 TEST_CASE("session: a partial and its final share an id, and the next segment gets a new one") {
     Rig rig;
     rig.vad.speech = {{8000, 40000}};  // 0.5-2.5 s, still running at the first tick

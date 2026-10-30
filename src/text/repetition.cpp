@@ -1,10 +1,13 @@
 #include "text/repetition.h"
 
+#include <algorithm>
 #include <cctype>
 #include <cstddef>
 #include <string>
+#include <utility>
 
 #include "text/clean.h"
+#include "text/score.h"
 #include "text/utf.h"
 
 namespace echoir::text {
@@ -86,7 +89,53 @@ void append_folded(std::u32string_view text, std::u32string& out) {
     }
 }
 
+struct Word {
+    std::string folded;   // normalize_for_score of the word
+    std::size_t end = 0;  // index in the text just past the word
+};
+
+// The words of the text that normalize to something, in order.
+std::vector<Word> split_words(std::u32string_view text) {
+    std::vector<Word> words;
+    std::size_t i = 0;
+    while (i < text.size()) {
+        if (is_score_space(text[i])) {
+            ++i;
+            continue;
+        }
+        const std::size_t start = i;
+        while (i < text.size() && !is_score_space(text[i])) {
+            ++i;
+        }
+        std::string folded = normalize_for_score(utf32_to_utf8(text.substr(start, i - start)));
+        if (!folded.empty()) {
+            words.push_back(Word{std::move(folded), i});
+        }
+    }
+    return words;
+}
+
 }  // namespace
+
+std::u32string drop_seam_repeat(std::u32string_view text, std::u32string_view before) {
+    const std::vector<Word> head = split_words(text);
+    const std::vector<Word> tail = split_words(before);
+    for (std::size_t k = std::min({kMaxSeamWords, head.size(), tail.size()}); k > 0; --k) {
+        bool same = true;
+        for (std::size_t i = 0; i < k && same; ++i) {
+            same = head[i].folded == tail[tail.size() - k + i].folded;
+        }
+        if (!same) {
+            continue;
+        }
+        std::size_t rest = head[k - 1].end;
+        while (rest < text.size() && is_score_space(text[rest])) {
+            ++rest;
+        }
+        return std::u32string(text.substr(rest));
+    }
+    return std::u32string(text);
+}
 
 bool is_repetitive(std::u32string_view text) {
     return has_runaway_run(text) || has_repeated_phrase(text) || has_few_distinct(text);

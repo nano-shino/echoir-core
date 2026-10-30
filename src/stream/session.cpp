@@ -51,6 +51,14 @@
 // limit (stream::find_cut). The part before the cut becomes a FINAL. The rest is carried, and the
 // next tick decodes it again, where it may be ongoing as a new segment with a new id.
 //
+// Seam. A cut can still split a word, and a decoder then writes that word on both sides of the
+// cut. So the segment that starts within kSeamMs (0.5 s) of a forced cut drops up to 3 leading
+// words that repeat the last words of the FINAL before the cut (text::drop_seam_repeat), in each
+// of its decodes, PARTIAL and FINAL. Speech can repeat a word across a pause, so this never
+// applies at a VAD boundary, only at a forced cut.
+// The seam is kept until the next segment ends. clear(), reset() and a failed live tick drop it,
+// like the continuation.
+//
 // Ids and events. Segment ids count up from 1 and are not reused, not even after reset(). An
 // ongoing segment keeps its id until it is final. A FINAL takes over the id of a PARTIAL that was
 // shown, so the host replaces the PARTIAL. An empty FINAL is sent only to retract a shown PARTIAL.
@@ -90,9 +98,9 @@
 //      segment, as abandon_window does.
 //
 // Timestamps are computed from the exact sample position, so rounding does not add up across ticks.
-// clear() bumps a generation counter, and text decoded from earlier audio is then dropped. Under
-// the rollback policy, a tick that starts after a clear() also drops the continuation, because
-// clear() runs without the decode lock and cannot drop it itself. reset() flushes and then drops
+// clear() bumps a generation counter, and text decoded from earlier audio is then dropped. A tick
+// that starts after a clear() also drops the continuation and the seam, because clear() runs
+// without the decode lock and cannot drop them itself. reset() flushes and then drops
 // all audio and text state.
 
 namespace echoir {
@@ -110,6 +118,8 @@ constexpr std::int64_t kCarryTail = 8000;
 constexpr std::int64_t kMinPromptSamples = 16000;
 // The decoder gets at most this many of the latest finals as history.
 constexpr std::size_t kPromptHistory = 2;
+// A segment that starts this many ms or less after a forced cut is decoded as its seam segment.
+constexpr std::int64_t kSeamMs = 500;
 // A forced cut needs room for a quiet block, and a block is 100 ms, so the longest segment must be
 // at least two blocks.
 constexpr std::int64_t kMinMaxSegmentMs = 200;
@@ -167,6 +177,11 @@ void Session::State::close_open() {
 void Session::State::drop_continuation() {
     open_decodes = 0;
     continuation.clear();
+}
+
+void Session::State::drop_seam() {
+    seam_text.clear();
+    seam_ms = -1;
 }
 
 Session::Session(IAsrBackend& backend, vad::IVad& vad, SessionConfig config, SessionSink sink)
@@ -426,12 +441,13 @@ bool Session::run_tick(bool finish, bool drop_on_failure) {
     }
 
     State next = state_;
-    // clear() runs without the decode lock, so it cannot drop the continuation itself. A
-    // continuation from before the clear is dropped here instead, before its segment decodes again.
-    if (next.continuation_generation != generation) {
+    // clear() runs without the decode lock, so it cannot drop the continuation or the seam itself.
+    // Both are dropped here instead when they are from before the clear, before anything decodes.
+    if (next.decoded_generation != generation) {
         next.drop_continuation();
+        next.drop_seam();
     }
-    next.continuation_generation = generation;
+    next.decoded_generation = generation;
     std::vector<SessionEvent> events;
     std::vector<float> current = std::move(window);
     std::int64_t origin = origin_samples_;
@@ -527,6 +543,8 @@ std::size_t Session::analyze(const std::vector<float>& window, bool finish, std:
             st.prompts.erase(st.prompts.begin(),
                              st.prompts.end() - static_cast<std::ptrdiff_t>(kPromptHistory));
         }
+        const bool at_seam =
+            st.seam_ms >= 0 && abs_start >= st.seam_ms && abs_start <= st.seam_ms + kSeamMs;
         // Rollback: decode n of the ongoing segment continues from decode n-1, and the first
         // unfixed_decodes decodes start from nothing. A final is decoded alone, because the
         // continuation came from a decode that heard audio past the segment's end.
@@ -556,6 +574,9 @@ std::size_t Session::analyze(const std::vector<float>& window, bool finish, std:
                 raw.clear();
                 clean.clear();
             }
+        }
+        if (at_seam) {
+            clean = text::drop_seam_repeat(clean, st.seam_text);
         }
 
         if (ongoing) {
@@ -613,8 +634,11 @@ std::size_t Session::analyze(const std::vector<float>& window, bool finish, std:
         last_final_end = std::max(last_final_end, end);
         // The audio after a forced cut is left for the next call, which analyzes it again.
         if (forced) {
+            st.seam_text = clean;
+            st.seam_ms = abs_end;
             break;
         }
+        st.drop_seam();
     }
 
     if (finish) {
@@ -624,6 +648,9 @@ std::size_t Session::analyze(const std::vector<float>& window, bool finish, std:
             events.push_back(std::move(*ev));
         }
         st.close_open();
+        if (!forced) {
+            st.drop_seam();
+        }
         // After a forced cut the remainder is not decoded yet, so return the cut and let the
         // caller analyze the rest.
         return forced ? static_cast<std::size_t>(last_final_end) : window.size();
@@ -691,6 +718,7 @@ void Session::abandon_window(std::size_t taken, std::uint64_t generation) noexce
         origin_samples_ += static_cast<std::int64_t>(carry_.size() + taken);
         carry_.clear();
         state_.close_open();
+        state_.drop_seam();
         deliver(events, generation);
     } catch (...) {
         // Only an allocation or a failed lock gets here. When that happens before the state

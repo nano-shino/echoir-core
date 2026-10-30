@@ -4,6 +4,7 @@
 #include "doctest.h"
 #include "text/repetition.h"
 
+using echoir::text::drop_seam_repeat;
 using echoir::text::echoes_history;
 using echoir::text::is_repetitive;
 
@@ -69,6 +70,32 @@ TEST_CASE("echoes_history: empty text, punctuation only and no history never mat
     CHECK_FALSE(echoes_history(U"", history));
     CHECK_FALSE(echoes_history(U" ... ", history));
     CHECK_FALSE(echoes_history(U"Understood, sir.", {}));
+}
+
+TEST_CASE("drop_seam_repeat: the leading words that repeat the end of the text before go") {
+    CHECK(drop_seam_repeat(U"Respond to passing ships.", U"the animals respond.") ==
+          U"to passing ships.");
+    CHECK(drop_seam_repeat(U"We spent the night.", U"down the road, we.") == U"spent the night.");
+    // The longest match wins, up to three words.
+    CHECK(drop_seam_repeat(U"the road. Then we left.", U"down the road.") == U"Then we left.");
+    CHECK(drop_seam_repeat(U"a b c d e", U"x a b c d") == U"a b c d e");
+    CHECK(drop_seam_repeat(U"b c d e", U"x a b c d") == U"e");
+}
+
+TEST_CASE("drop_seam_repeat: Unicode punctuation and case are ignored, word order is not") {
+    CHECK(drop_seam_repeat(U"\u00ABRespond\u00BB to them.", U"they respond\u2026") ==
+          U"to them.");
+    CHECK(drop_seam_repeat(U"\u00C9t\u00E9 encore.", U"l'\u00E9t\u00E9") == U"\u00C9t\u00E9 encore.");
+    CHECK(drop_seam_repeat(U"ships passing to", U"to passing ships") == U"passing to");
+    CHECK(drop_seam_repeat(U"respondent today", U"they respond") == U"respondent today");
+}
+
+TEST_CASE("drop_seam_repeat: punctuation-only words are skipped, empty text stays as it is") {
+    CHECK(drop_seam_repeat(U"\u2014 we \u2014 left", U"we \u2026") == U"\u2014 left");
+    CHECK(drop_seam_repeat(U"we", U"so we") == U"");
+    CHECK(drop_seam_repeat(U"", U"we") == U"");
+    CHECK(drop_seam_repeat(U"we left", U"") == U"we left");
+    CHECK(drop_seam_repeat(U" ... ", U"...") == U" ... ");
 }
 
 TEST_CASE("echoes_history: CJK compares code points, and the ideographic space is ignored") {

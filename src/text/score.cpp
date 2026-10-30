@@ -189,6 +189,8 @@ std::string normalize_for_score(std::string_view utf8) {
     return utf32_to_utf8(normalize(utf8_to_utf32(utf8)));
 }
 
+bool is_score_space(char32_t c) { return in_table(c, score_tables::kSpace); }
+
 ErrorRate error_rate(std::string_view hyp_utf8, std::string_view ref_utf8) {
     const std::vector<std::u32string> hyp = to_units(normalize(utf8_to_utf32(hyp_utf8)));
     const std::vector<std::u32string> ref = to_units(normalize(utf8_to_utf32(ref_utf8)));
