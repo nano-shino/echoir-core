@@ -17,6 +17,7 @@
 #include <vector>
 
 #include "audio/spsc_ring.h"
+#include "capture/gap_fill.h"
 #include "errors.h"
 #include "stream/session.h"
 
@@ -34,6 +35,9 @@ constexpr std::chrono::milliseconds kQuickReopenInterval{200};
 constexpr std::chrono::milliseconds kSlowReopenInterval{1000};
 // The largest piece that one push hands to the session, in seconds of audio.
 constexpr double kPushSeconds = 0.1;
+// A device that sends nothing for this long is silent, and the gap is filled with silence, so
+// timestamps follow the wall clock (loopback sends nothing while no sound plays).
+constexpr std::chrono::milliseconds kGapIdle{200};
 
 // The ERROR detail for a device that cannot be used any more.
 constexpr const char* kDeviceLost = "device_lost";
@@ -78,6 +82,7 @@ struct CaptureFeed::Impl {
             std::lock_guard<std::mutex> lock(device_mu_);
             start_locked();
         }
+        gap_.start(GapFill::Clock::now());
         started_ = true;
         try {
             feeder_ = std::thread([this] { run_feeder_guarded(); });
@@ -257,6 +262,7 @@ struct CaptureFeed::Impl {
         }
         for (int attempt = 0;; ++attempt) {
             if (attempt > 0) {
+                fill_gap();
                 waiting_ = attempt >= kQuickReopenAttempts;
                 std::unique_lock<std::mutex> lock(wake_mu_);
                 wake_cv_.wait_for(lock,
@@ -305,6 +311,29 @@ struct CaptureFeed::Impl {
             session_.push(samples, static_cast<std::int32_t>(rate),
                           static_cast<std::int32_t>(channels));
             delivered_ += got / channels;
+            gap_.on_audio(got / channels, rate, GapFill::Clock::now());
+        }
+        fill_gap();
+    }
+
+    // Pushes silence for the time the device sent nothing, at the format of the device last
+    // opened. Feeder thread only.
+    void fill_gap() {
+        const std::uint32_t rate = rate_.load();
+        const std::uint32_t channels = channels_.load();
+        std::size_t missing = gap_.silence_frames(rate, GapFill::Clock::now());
+        if (missing == 0) {
+            return;
+        }
+        const std::size_t piece_frames = std::max<std::size_t>(
+            1, static_cast<std::size_t>(static_cast<double>(rate) * kPushSeconds));
+        while (missing > 0) {
+            const std::size_t frames = std::min(missing, piece_frames);
+            silence_.assign(frames * channels, 0.0f);
+            session_.push(std::span<const float>(silence_), static_cast<std::int32_t>(rate),
+                          static_cast<std::int32_t>(channels));
+            gap_.on_silence(frames, rate);
+            missing -= frames;
         }
     }
 
@@ -383,8 +412,10 @@ struct CaptureFeed::Impl {
     std::condition_variable wake_cv_;
 
     std::thread feeder_;
-    std::vector<float> buffer_;  // feeder thread only
-    bool started_ = false;       // owner thread only
+    std::vector<float> buffer_;   // feeder thread only
+    std::vector<float> silence_;  // feeder thread only
+    GapFill gap_{kGapIdle};       // started by the owner thread, then feeder thread only
+    bool started_ = false;        // owner thread only
     bool stopped_ = false;       // owner thread only
 };
 

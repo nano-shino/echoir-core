@@ -247,6 +247,10 @@ ECHOIR_API const char*    echoir_devices_json(void);
 // backend has none returns ECHOIR_ERR_NOT_IMPLEMENTED, and an unknown device_id returns
 // ECHOIR_ERR_INVALID_ARG. Works in callback and queue mode.
 //
+// Timestamps follow the wall clock from the start of the capture: when the device sends nothing
+// for a moment (loopback while no sound plays, or a lost default device), silence is pushed for
+// the time that passed.
+//
 // If the chosen device is lost, an ERROR event with detail "device_lost" is sent, and the capture
 // ends. The session keeps running until it is stopped. If the default device is lost, the capture
 // reopens the new default, and when the system has no device at all it keeps trying (every second)
