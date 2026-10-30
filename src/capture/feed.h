@@ -1,7 +1,9 @@
 // Live capture from an audio device into a streaming session.
 //
 // The device's data callback only moves samples into a lock-free ring. A feeder thread drains the
-// ring into Session::push about every 20 ms, so the audio thread never waits on the session.
+// ring into Session::push about every 20 ms, so the audio thread never waits on the session. When
+// the device sends nothing for a moment, the feeder pushes silence instead, so the session's
+// timeline follows the wall clock.
 #pragma once
 
 #include <cstdint>
@@ -50,8 +52,9 @@ public:
     // system has no device at all. The capture resumes by itself when one appears. Safe from any
     // thread.
     bool waiting() const;
-    // Frames pushed into the session, and frames the callback could not store because the feeder
-    // fell behind. Safe from any thread.
+    // Frames of device audio pushed into the session (silence that fills a gap is not counted),
+    // and frames the callback could not store because the feeder fell behind. Safe from any
+    // thread.
     std::uint64_t frames_delivered() const;
     std::uint64_t dropped_frames() const;
     // The largest sample magnitude pushed so far. Safe from any thread.
