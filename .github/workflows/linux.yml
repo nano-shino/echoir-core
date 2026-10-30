@@ -55,12 +55,16 @@ jobs:
       - name: Compiler cache
         uses: hendrikmuhs/ccache-action@v1.2
         with:
-          key: linux-cpu
+          key: linux-cpu-x86-64-v3
           max-size: 2G
 
+      # Not tuned for the runner (GGML_NATIVE=OFF, x86-64-v3 as the release build): ccache keys on the
+      # literal -march=native, so objects built on one runner CPU would be reused on another and crash
+      # with SIGILL.
       - name: Configure
         run: >-
           cmake --preset linux-cpu
+          -DGGML_NATIVE=OFF -DGGML_AVX=ON -DGGML_AVX2=ON -DGGML_FMA=ON -DGGML_F16C=ON -DGGML_BMI2=ON
           -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
 
       - name: Build
