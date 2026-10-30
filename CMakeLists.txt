@@ -42,9 +42,14 @@ set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 # Executables and shared libraries go to build/<preset>/bin, as llama.cpp and whisper.cpp do.
 set(CMAKE_RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
 set(CMAKE_LIBRARY_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin")
-# The build RPATH is relative ($ORIGIN, @loader_path), so a copy of bin/ runs from any folder.
-# tools/package-native.sh ships bin/ as it is.
+# The build RPATH is relative, so a copy of bin/ runs from any folder. tools/package-native.sh
+# ships bin/ as it is. ELF takes $ORIGIN from CMAKE_BUILD_RPATH_USE_ORIGIN. That does nothing for
+# Mach-O, so on Apple the RPATH is @loader_path. It is set here, before the backend subprojects
+# are added, so ggml, whisper.cpp and llama.cpp inherit it too.
 set(CMAKE_BUILD_RPATH_USE_ORIGIN ON)
+if(APPLE)
+  set(CMAKE_BUILD_RPATH "@loader_path")
+endif()
 
 # --- Shared targets ---------------------------------------------------------------
 add_library(echoir_options INTERFACE)
