@@ -49,6 +49,8 @@ import argparse
 import array
 import base64
 import json
+import math
+import operator
 import os
 import re
 import subprocess
@@ -81,6 +83,8 @@ POLICIES = ("agreement", "rollback")
 RAW_PCM_FORMATS = ("s16le",)
 # The audio of a serve case goes to the service in chunks of this many milliseconds.
 SERVE_CHUNK_MS = 100
+# Source samples on each side of an output sample that the resampler's kernel covers.
+RESAMPLE_HALF_TAPS = 16
 
 # A tool that runs longer than this has hung, which is a failure.
 TIMEOUT_S = 900
@@ -271,16 +275,34 @@ def run_tool(args, what, stdin=None):
         raise Fail(f"{what} printed text that is not UTF-8: {e}")
 
 
-def resample_linear(plane, src_rate, dst_rate):
-    """One channel's samples at dst_rate, by linear interpolation between the source samples."""
-    n_src = len(plane)
+def resample(plane, src_rate, dst_rate):
+    """One channel's samples at dst_rate, by Blackman-windowed sinc interpolation.
+
+    Linear interpolation would damp the top octave below the source's Nyquist rate, so word
+    endings would come out quieter than in real audio at dst_rate, and the pauses the core finds
+    would differ from the source's.
+    """
+    g = math.gcd(src_rate, dst_rate)
+    up, down = dst_rate // g, src_rate // g
+    cutoff = min(1.0, dst_rate / src_rate)
+    kernels = []
+    for phase in range(up):
+        kernel = []
+        for k in range(-RESAMPLE_HALF_TAPS + 1, RESAMPLE_HALF_TAPS + 1):
+            t = k - phase / up
+            x = math.pi * cutoff * t
+            sinc = cutoff if t == 0 else cutoff * math.sin(x) / x
+            w = (t + RESAMPLE_HALF_TAPS) / (2 * RESAMPLE_HALF_TAPS)
+            window = 0.42 - 0.5 * math.cos(2 * math.pi * w) + 0.08 * math.cos(4 * math.pi * w)
+            kernel.append(sinc * window)
+        kernels.append(kernel)
+    pad = [0] * RESAMPLE_HALF_TAPS
+    padded = pad + list(plane) + pad
     out = []
-    for j in range(n_src * dst_rate // src_rate):
-        i, rem = divmod(j * src_rate, dst_rate)
-        if i + 1 < n_src:
-            out.append(plane[i] + (plane[i + 1] - plane[i]) * rem / dst_rate)
-        else:
-            out.append(plane[i])
+    for j in range(len(plane) * dst_rate // src_rate):
+        base, phase = divmod(j * down, up)
+        out.append(sum(map(operator.mul, padded[base + 1:base + 1 + 2 * RESAMPLE_HALF_TAPS],
+                           kernels[phase])))
     return out
 
 
@@ -301,7 +323,7 @@ def fixture_as_raw_pcm(path, spec):
     if sys.byteorder == "big":
         samples.byteswap()
     planes = [
-        resample_linear(samples[c::src_channels], src_rate, spec["rate"])
+        resample(samples[c::src_channels], src_rate, spec["rate"])
         for c in range(src_channels)
     ]
     if src_channels != spec["channels"]:
