@@ -37,6 +37,19 @@ public sealed class ModelCatalogue
         return null;
     }
 
+    // The id of the default VAD of a model, or null when it has none. DefaultVad is keyed by the
+    // backend key, which differs from the registry's backend name for Qwen ("qwen3-asr" is "qwen").
+    public string? DefaultVadId(ModelInfo model)
+    {
+        string? key = model.Backend switch
+        {
+            "whisper" => "whisper",
+            "qwen3-asr" => "qwen",
+            _ => null,
+        };
+        return key is not null && DefaultVad.TryGetValue(key, out string? vadId) ? vadId : null;
+    }
+
     // Parses the echoir_models_json text. A memory budget, when given, replaces the core's fits.
     internal static ModelCatalogue Parse(string json, long? memoryBudgetMb)
     {
