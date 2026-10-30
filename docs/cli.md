@@ -39,9 +39,9 @@ build/macos-cpu/bin/echoir transcribe --input mic --stream --duration 30 --model
 
 ```sh
 build/macos-cpu/bin/echoir transcribe tests/fixtures/jfk.wav --model whisper-tiny-en --offline
-build/macos-cpu/bin/echoir transcribe build/fixtures/zh_short.wav \
+build/macos-cpu/bin/echoir transcribe tests/fixtures/pd_nasa_ep180.wav \
   --backend qwen --model qwen3-asr-0.6b-q8_0 --offline
-build/macos-cpu/bin/echoir transcribe build/fixtures/sentences_en.wav --stream --format jsonl \
+build/macos-cpu/bin/echoir transcribe tests/fixtures/pd_nasa_ep180.wav --stream --format jsonl \
   --backend qwen --model qwen3-asr-0.6b-q8_0
 ```
 
@@ -76,8 +76,8 @@ or character error rate for CJK text), the edit counts, the audio and wall times
 factor (wall time over audio time) and the model load time, which the factor leaves out.
 
 ```sh
-build/macos-cpu/bin/echoir bench build/fixtures/sentences_en.wav \
-  --ref build/fixtures/sentences_en.ref.txt --no-gpu
+build/macos-cpu/bin/echoir bench tests/fixtures/pd_nasa_ep180.wav \
+  --ref tests/fixtures/pd_nasa_ep180.ref.txt --no-gpu
 ```
 
 `echoir score` compares a transcript with a reference text. Both are UTF-8 files, and `-` reads

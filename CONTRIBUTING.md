@@ -20,7 +20,7 @@ cmake --build --preset macos-cpu
 ctest --preset macos-metal-quick        # unit, C ABI, CLI and integration tests, about a minute
 ctest --preset macos-cpu                # every test except the long and stress labels
 ctest --preset macos-cpu -L e2e         # end-to-end cases
-ctest --preset macos-cpu -R long_session  # the long-session cases, about ten minutes of audio
+ctest --preset macos-cpu -R qwen_stream_golden  # the Qwen streaming cases, about 100 s
 ```
 
 The integration and e2e tests need models. They skip, and do not fail, when a model is missing.
@@ -30,7 +30,7 @@ Fetch the ones you need:
 tools/fetch-models.sh whisper-tiny-en silero-v6.2.0 firered-vad-v1
 ```
 
-The longer test audio is generated on macOS by `tools/make-fixtures.sh`.
+The generated test audio is built with `python3 -I tools/make-fixtures.py`, which runs on any host.
 
 ## Style
 
@@ -50,7 +50,7 @@ The longer test audio is generated on macOS by `tools/make-fixtures.sh`.
 - Comments and documentation must make sense on their own. Do not refer to internal planning
   documents, private notes, issue tracker entries that are not public, task identifiers or local
   file paths.
-- Keep the committed fixtures in `tests/fixtures/` small: under 2 MB in total.
+- Keep the committed fixtures in `tests/fixtures/` small: under 10 MB in total.
 - A new input path or output mode needs an end-to-end case in `tests/e2e/cases.json`.
 
 ## Pull requests

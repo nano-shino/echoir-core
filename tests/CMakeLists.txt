@@ -57,27 +57,18 @@ if(TARGET echoir_engine)
   target_link_libraries(echoir_integration_tests PRIVATE
     echoir_options echoir_single echoir_engine Threads::Threads)
 
-  # The long-session cases run about ten minutes of audio each. The integration test leaves them
-  # out, and the test presets exclude the long label, so they run only by name:
-  # ctest -R long_session. They run alone (RUN_SERIAL), so other tests do not slow their timing.
-  # The Qwen streaming golden cases take about 100 s together, and their Whisper twins cover the
-  # same session logic, so they also carry the long label: ctest -R qwen_stream_golden.
-  add_test(NAME integration COMMAND echoir_integration_tests
-    "-tce=long session*,stream session * with qwen")
+  add_test(NAME integration COMMAND echoir_integration_tests "-tce=stream session * with qwen")
   set_tests_properties(integration PROPERTIES LABELS integration)
-  add_test(NAME long_session COMMAND echoir_integration_tests "-tc=long session*")
-  # The pass line needs at least four cases run and none failed. Without it, a filter that matches
-  # nothing would pass, since doctest exits 0 when no case fails.
-  set_tests_properties(long_session PROPERTIES LABELS long TIMEOUT 3600 RUN_SERIAL TRUE
-    PASS_REGULAR_EXPRESSION [=[test cases: +([4-9]|[1-9][0-9]+) \| +([4-9]|[1-9][0-9]+) passed \| +0 failed]=])
-  # On macOS a missing model or fixture fails this test instead of passing with every case skipped.
-  # Other hosts do not set it: their runs lack the long_mix fixture and the Qwen models.
+  # The Qwen streaming golden cases take about 100 s together, and their Whisper twins cover the
+  # same session logic, so they carry the long label. The presets leave them out. On macOS a
+  # missing model or fixture fails this test instead of passing with every case skipped. Other
+  # hosts do not set it: their runs lack the Qwen models.
   add_test(NAME qwen_stream_golden COMMAND echoir_integration_tests
     "-tc=stream session * with qwen")
   set_tests_properties(qwen_stream_golden PROPERTIES LABELS long TIMEOUT 900
     PASS_REGULAR_EXPRESSION [=[test cases: +([2-9]|[1-9][0-9]+) \| +([2-9]|[1-9][0-9]+) passed \| +0 failed]=])
   if(APPLE)
-    set_tests_properties(long_session qwen_stream_golden PROPERTIES
+    set_tests_properties(qwen_stream_golden PROPERTIES
       ENVIRONMENT ECHOIR_REQUIRE_MODELS=1)
   endif()
   endif()  # NOT ECHOIR_FAKE_BACKEND

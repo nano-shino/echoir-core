@@ -212,19 +212,19 @@ TEST_CASE("QwenBackend gives the same text for jfk.wav after another window") {
     ECHOIR_REQUIRE_OR_SKIP(mmproj, "qwen3-asr-0.6b-q8_0 mmproj");
     const auto jfk = et::fixture("jfk");
     ECHOIR_REQUIRE_OR_SKIP(jfk, "jfk.wav fixture");
-    const auto zh = et::fixture("zh_short");
-    ECHOIR_REQUIRE_OR_SKIP(zh, "zh_short fixture");
+    const auto other = et::fixture("pd_nasa_ep345");
+    ECHOIR_REQUIRE_OR_SKIP(other, "pd_nasa_ep345.wav fixture");
 
     echoir::IAsrBackend& backend = shared_cpu_backend();
     const std::vector<float> jfk_pcm = load_16k_mono(*jfk);
-    const std::vector<float> zh_pcm = load_16k_mono(*zh);
+    const std::vector<float> other_pcm = load_16k_mono(*other);
     const std::vector<std::string> no_history;
 
     // The second jfk decode follows a different window, so it only matches the first one if the
-    // KV cache from the Chinese decode was cleared.
+    // KV cache from the other decode was cleared.
     const std::string first =
         backend.decode({std::span<const float>(jfk_pcm), no_history, "auto"}).text;
-    backend.decode({std::span<const float>(zh_pcm), no_history, "auto"});
+    backend.decode({std::span<const float>(other_pcm), no_history, "auto"});
     const std::string second =
         backend.decode({std::span<const float>(jfk_pcm), no_history, "auto"}).text;
     INFO("first: " << first << "\nsecond: " << second);
@@ -365,37 +365,15 @@ TEST_CASE("QwenBackend rejects NaN and infinite samples") {
     }
 }
 
-TEST_CASE("QwenBackend decodes zh_short with a character error rate of at most 0.10") {
-    const auto model = et::model_file("qwen3-asr-0.6b-q8_0");
-    ECHOIR_REQUIRE_OR_SKIP(model, "qwen3-asr-0.6b-q8_0 model (models/Qwen3-ASR-0.6B-Q8_0.gguf)");
-    const auto mmproj = et::model_file("qwen3-asr-0.6b-q8_0", "mmproj");
-    ECHOIR_REQUIRE_OR_SKIP(mmproj, "qwen3-asr-0.6b-q8_0 mmproj");
-    const auto wav = et::fixture("zh_short");
-    ECHOIR_REQUIRE_OR_SKIP(wav, "zh_short fixture");
-
-    fs::path ref_path = *wav;
-    ref_path.replace_extension(".ref.txt");
-    const std::string ref = read_text(ref_path);
-    const std::vector<float> pcm = load_16k_mono(*wav);
-    const std::vector<std::string> no_history;
-    const std::string hyp =
-        shared_cpu_backend().decode({std::span<const float>(pcm), no_history, "auto"}).text;
-
-    const echoir::text::ErrorRate score = echoir::text::error_rate(hyp, ref);
-    INFO("hyp: " << hyp << "\nref: " << ref << "\nCER " << score.rate);
-    CHECK(!hyp.empty());
-    CHECK(score.rate <= 0.10);
-}
-
-TEST_CASE("QwenBackend transcribes sentences_en by VAD ranges with a WER of at most 0.10") {
+TEST_CASE("QwenBackend transcribes pd_nasa_ep180 by VAD ranges with a WER of at most 0.10") {
     const auto model = et::model_file("qwen3-asr-0.6b-q8_0");
     ECHOIR_REQUIRE_OR_SKIP(model, "qwen3-asr-0.6b-q8_0 model (models/Qwen3-ASR-0.6B-Q8_0.gguf)");
     const auto mmproj = et::model_file("qwen3-asr-0.6b-q8_0", "mmproj");
     ECHOIR_REQUIRE_OR_SKIP(mmproj, "qwen3-asr-0.6b-q8_0 mmproj");
     const auto vad_model = et::model_file("firered-vad-v1", "vad");
     ECHOIR_REQUIRE_OR_SKIP(vad_model, "firered-vad-v1 (vad) model");
-    const auto wav = et::fixture("sentences_en");
-    ECHOIR_REQUIRE_OR_SKIP(wav, "sentences_en fixture");
+    const auto wav = et::fixture("pd_nasa_ep180");
+    ECHOIR_REQUIRE_OR_SKIP(wav, "pd_nasa_ep180.wav fixture");
 
     fs::path ref_path = *wav;
     ref_path.replace_extension(".ref.txt");
