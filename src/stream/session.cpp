@@ -51,11 +51,14 @@
 // limit (stream::find_cut). The part before the cut becomes a FINAL. The rest is carried, and the
 // next tick decodes it again, where it may be ongoing as a new segment with a new id.
 //
-// Seam. A cut can still split a word, and a decoder then writes that word on both sides of the
-// cut. So the segment that starts within kSeamMs (0.5 s) of a forced cut drops up to 3 leading
-// words that repeat the last words of the FINAL before the cut (text::drop_seam_repeat), in each
-// of its decodes, PARTIAL and FINAL. Speech can repeat a word across a pause, so this never
-// applies at a VAD boundary, only at a forced cut.
+// Seam. The segment that starts within kSeamMs (0.5 s) of a forced cut differs from other
+// segments in two ways, in each of its decodes, PARTIAL and FINAL:
+//   1. No history. The latest final can end mid-sentence at the cut, and a decoder given it as
+//      history writes words from it for the audio after the cut. So the echo check is skipped too.
+//   2. A cut can still split a word, and a decoder then writes that word on both sides of the cut.
+//      So up to 3 leading words that repeat the last words of the FINAL before the cut are
+//      dropped (text::drop_seam_repeat). Speech can repeat a word across a pause, so this never
+//      applies at a VAD boundary, only at a forced cut.
 // The seam is kept until the next segment ends. clear(), reset() and a failed live tick drop it,
 // like the continuation.
 //
@@ -545,12 +548,13 @@ std::size_t Session::analyze(const std::vector<float>& window, bool finish, std:
         }
         const bool at_seam =
             st.seam_ms >= 0 && abs_start >= st.seam_ms && abs_start <= st.seam_ms + kSeamMs;
+        const std::vector<std::string> no_history;
         // Rollback: decode n of the ongoing segment continues from decode n-1, and the first
         // unfixed_decodes decodes start from nothing. A final is decoded alone, because the
         // continuation came from a decode that heard audio past the segment's end.
         DecodeRequest request{
             std::span<const float>(window.data() + start, static_cast<std::size_t>(end - start)),
-            st.prompts, config_.language, config_.context};
+            at_seam ? no_history : st.prompts, config_.language, config_.context};
         if (rollback && ongoing && st.open_decodes >= config_.unfixed_decodes) {
             request.prefix = st.continuation;
             request.rollback_tokens = config_.rollback_tokens;
@@ -562,8 +566,7 @@ std::size_t Session::analyze(const std::vector<float>& window, bool finish, std:
         // audio is decoded again without history. Speech that really repeats an earlier line
         // decodes to it again. Audio that decodes to something else holds no words the decoder
         // can agree on, such as noise or a fade-out, so it decodes to nothing.
-        if (!st.prompts.empty() && text::echoes_history(clean, st.prompts)) {
-            const std::vector<std::string> no_history;
+        if (!at_seam && !st.prompts.empty() && text::echoes_history(clean, st.prompts)) {
             DecodeRequest retry{request.pcm, no_history, request.language, request.context,
                                 request.prefix, request.rollback_tokens};
             decoded = backend_.decode(retry);

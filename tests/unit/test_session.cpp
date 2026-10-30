@@ -349,6 +349,15 @@ TEST_CASE("session: the segment after a forced cut drops the words that repeat t
     CHECK(texts_of(rig.events, ECHOIR_EVENT_PARTIAL) == std::vector<std::string>{"spent the night."});
     CHECK(texts_of(rig.events, ECHOIR_EVENT_FINAL) ==
           std::vector<std::string>{"[0,8000)", "We drove down the road, we.", "spent the night."});
+    // The segment that starts at the cut is decoded without history.
+    std::size_t seam_calls = 0;
+    for (const FakeBackend::Call& call : rig.backend.calls) {
+        if (call.start == 288800) {
+            ++seam_calls;
+            CHECK(call.history.empty());
+        }
+    }
+    CHECK(seam_calls == 2);
 }
 
 TEST_CASE("session: a word repeated across a VAD boundary is kept") {
@@ -362,6 +371,8 @@ TEST_CASE("session: a word repeated across a VAD boundary is kept") {
     rig.session().flush();
 
     CHECK(texts_of(rig.events, ECHOIR_EVENT_FINAL) == std::vector<std::string>{"No,", "no, stop."});
+    REQUIRE(rig.backend.calls.size() == 2);
+    CHECK(rig.backend.calls[1].history == std::vector<std::string>{"No,"});
 }
 
 TEST_CASE("session: a clear after a forced cut drops the seam") {

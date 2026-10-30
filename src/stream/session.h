@@ -158,7 +158,8 @@ private:
         int open_decodes = 0;
         std::string continuation;
         // The latest FINAL, when it ended at a forced cut, and the cut in session ms. The segment
-        // that starts at the cut drops its leading words that repeat it. Empty and -1 otherwise.
+        // that starts at the cut is decoded without history and drops its leading words that
+        // repeat it. Empty and -1 otherwise.
         std::u32string seam_text;
         std::int64_t seam_ms = -1;
         // The clear() generation that the continuation and the seam were decoded under. clear()
