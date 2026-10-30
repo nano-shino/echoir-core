@@ -10,6 +10,9 @@ public sealed class DownloadTests
 {
     private const string ModelId = "fake-asr";
     private const string FileName = "fake.bin";
+    private const string QwenModelId = "fake-qwen";
+    private const string VadId = "fake-vad";
+    private const string VadFileName = "vad.bin";
 
     private string _dir = string.Empty;
     private HttpListener? _listener;
@@ -36,14 +39,14 @@ public sealed class DownloadTests
     {
         SkipOnAndroid();
         byte[] payload = Payload(100_000);
-        string url = Serve(response =>
+        string baseUrl = Serve(response =>
         {
             response.ContentLength64 = payload.Length;
             response.OutputStream.Write(payload, 0, payload.Length);
             response.Close();
         });
 
-        var models = new EchoirModels(Registry(url, payload.Length));
+        var models = new EchoirModels(Registry(baseUrl, payload.Length));
         await models.DownloadAsync(ModelId, _dir, includeVad: false);
 
         string final = Path.Combine(_dir, FileName);
@@ -57,7 +60,7 @@ public sealed class DownloadTests
     {
         SkipOnAndroid();
         byte[] payload = Payload(100_000);
-        string url = Serve(response =>
+        string baseUrl = Serve(response =>
         {
             // Chunked, so the client sees a complete body that is shorter than the catalogue says.
             response.SendChunked = true;
@@ -65,13 +68,33 @@ public sealed class DownloadTests
             response.Close();
         });
 
-        var models = new EchoirModels(Registry(url, payload.Length));
+        var models = new EchoirModels(Registry(baseUrl, payload.Length));
         await Assert.ThrowsExceptionAsync<IOException>(
             () => models.DownloadAsync(ModelId, _dir, includeVad: false));
 
         string final = Path.Combine(_dir, FileName);
         Assert.IsFalse(File.Exists(final));
         Assert.IsFalse(File.Exists(final + ".part"));
+    }
+
+    [TestMethod]
+    public async Task QwenModelDownloadsItsDefaultVad()
+    {
+        SkipOnAndroid();
+        byte[] payload = Payload(100_000);
+        string baseUrl = Serve(response =>
+        {
+            response.ContentLength64 = payload.Length;
+            response.OutputStream.Write(payload, 0, payload.Length);
+            response.Close();
+        });
+
+        var models = new EchoirModels(QwenRegistry(baseUrl, payload.Length));
+        await models.DownloadAsync(QwenModelId, _dir);
+
+        Assert.IsTrue(File.Exists(Path.Combine(_dir, FileName)));
+        Assert.IsTrue(File.Exists(Path.Combine(_dir, VadFileName)));
+        Assert.IsFalse(File.Exists(Path.Combine(_dir, VadFileName + ".part")));
     }
 
     // On the Android device the client cannot reach the local HttpListener (Connection failure),
@@ -91,8 +114,8 @@ public sealed class DownloadTests
         return bytes;
     }
 
-    // Registry text with one model whose single file is at url and has the given size.
-    private static string Registry(string url, long size) => $$"""
+    // Registry text with one model whose single file is under baseUrl and has the given size.
+    private static string Registry(string baseUrl, long size) => $$"""
         {
           "version": 1,
           "default_vad": {},
@@ -102,7 +125,33 @@ public sealed class DownloadTests
               "backend": "whisper",
               "display": "Fake download",
               "files": [
-                { "role": "model", "name": "{{FileName}}", "url": "{{url}}", "size": {{size}} }
+                { "role": "model", "name": "{{FileName}}", "url": "{{baseUrl}}{{FileName}}", "size": {{size}} }
+              ]
+            }
+          ]
+        }
+        """;
+
+    // Registry text with a Qwen model (backend qwen3-asr) and its default VAD, both served under baseUrl.
+    private static string QwenRegistry(string baseUrl, long size) => $$"""
+        {
+          "version": 1,
+          "default_vad": { "qwen": "{{VadId}}" },
+          "models": [
+            {
+              "id": "{{QwenModelId}}",
+              "backend": "qwen3-asr",
+              "display": "Fake Qwen download",
+              "files": [
+                { "role": "model", "name": "{{FileName}}", "url": "{{baseUrl}}{{FileName}}", "size": {{size}} }
+              ]
+            },
+            {
+              "id": "{{VadId}}",
+              "backend": "vad",
+              "display": "Fake VAD",
+              "files": [
+                { "role": "vad", "name": "{{VadFileName}}", "url": "{{baseUrl}}{{VadFileName}}", "size": {{size}} }
               ]
             }
           ]
@@ -110,7 +159,7 @@ public sealed class DownloadTests
         """;
 
     // Starts a listener on a free local port. Each request is answered by respond, which must
-    // close the response. Returns the URL of the file.
+    // close the response. Returns the base URL: a file is at it plus its name.
     private string Serve(Action<HttpListenerResponse> respond)
     {
         int port = FreePort();
@@ -136,7 +185,7 @@ public sealed class DownloadTests
             }
         });
 
-        return $"http://localhost:{port}/{FileName}";
+        return $"http://localhost:{port}/";
     }
 
     private static int FreePort()

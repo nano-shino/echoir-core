@@ -61,8 +61,7 @@ public sealed class EchoirModels
 
         var files = new List<ModelFile>(model.Files);
         if (includeVad
-            && catalogue.DefaultVad.TryGetValue(model.Backend, out string? vadId)
-            && vadId is not null
+            && catalogue.DefaultVadId(model) is string vadId
             && catalogue.Find(vadId) is ModelInfo vad)
         {
             files.AddRange(vad.Files);
