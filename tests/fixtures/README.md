@@ -32,6 +32,10 @@ boundary and converted to 16 kHz mono. Each transcript was drafted with
 `whisper-large-v3-turbo-q5_0` and then checked by a person against the audio,
 with `qwen3-asr-1.7b-q8_0` used to find the words the two models disagree on.
 
+References keep the speaker's stutters and repeated words. Whisper's offline
+decoding drops most of them, so `whisper_voa_offline` scores higher than the
+other cases on the same kind of speech, and its `max_rate` allows for that.
+
 Keep the committed fixtures small: the limit is 10 MB in total.
 
 ## Generated (not committed)
