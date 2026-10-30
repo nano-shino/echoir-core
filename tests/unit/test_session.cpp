@@ -60,6 +60,7 @@ public:
     // Runs inside decode, after the call is recorded. It may throw, or call the session.
     std::function<void(std::int64_t, std::int64_t)> before_return;
     std::vector<Call> calls;
+    bool cut_history = false;  // history_at_cut()
 
     echoir::DecodeResult decode(const echoir::DecodeRequest& request) override {
         if (request.pcm.empty()) {
@@ -76,6 +77,7 @@ public:
     }
 
     std::string name() const override { return "fake"; }
+    bool history_at_cut() const override { return cut_history; }
 
     static std::string span_text(std::int64_t start, std::int64_t end) {
         return "[" + std::to_string(start) + "," + std::to_string(end) + ")";
@@ -355,6 +357,31 @@ TEST_CASE("session: the segment after a forced cut drops the words that repeat t
         if (call.start == 288800) {
             ++seam_calls;
             CHECK(call.history.empty());
+        }
+    }
+    CHECK(seam_calls == 2);
+}
+
+TEST_CASE("session: with history_at_cut the segment after a forced cut gets only the cut FINAL") {
+    Rig rig(cap_20s_config());
+    rig.backend.cut_history = true;
+    rig.backend.text_for = [](std::int64_t start, std::int64_t end) {
+        return start == 0 ? std::string("Earlier line.") : seam_text(start, end);
+    };
+    rig.vad.speech = {{0, 16000}, {32000, 400000}};
+    rig.push_ms(22500);
+    rig.session().process();  // cut at 304800
+    rig.push_ms(1000);
+    rig.session().process();
+    rig.session().flush();
+
+    std::size_t seam_calls = 0;
+    for (const FakeBackend::Call& call : rig.backend.calls) {
+        if (call.start == 32000) {
+            CHECK(call.history == std::vector<std::string>{"Earlier line."});
+        } else if (call.start > 32000) {
+            ++seam_calls;
+            CHECK(call.history == std::vector<std::string>{rig.events[1].text});
         }
     }
     CHECK(seam_calls == 2);

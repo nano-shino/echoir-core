@@ -35,6 +35,7 @@ public:
     DecodeResult decode(const DecodeRequest& request) override;
     std::string name() const override;
     bool supports_prefix() const override { return true; }
+    bool history_at_cut() const override { return true; }
 
 private:
     // Members are destroyed in reverse declaration order. The llama and mmproj contexts both use

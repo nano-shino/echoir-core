@@ -48,6 +48,9 @@ public:
     virtual std::string name() const = 0;  // "whisper" or "qwen3-asr"
     // True when decode() takes a non-empty DecodeRequest::prefix.
     virtual bool supports_prefix() const { return false; }
+    // The history that the stream session gives the segment that starts at a forced cut: the FINAL
+    // before the cut when true, none when false. Whisper decodes that audio best with no history.
+    virtual bool history_at_cut() const { return false; }
 };
 
 // Creates the backend that params.backend names. Throws std::invalid_argument for bad params (a
