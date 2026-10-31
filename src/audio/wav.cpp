@@ -147,8 +147,8 @@ std::size_t WavReader::read(std::vector<float>& out, std::size_t max_frames) {
     const std::size_t width = channels();
     out.resize(max_frames * width);
     ma_uint64 frames_read = 0;
-    const ma_result result = ma_decoder_read_pcm_frames(&impl_->decoder.get(), out.data(),
-                                                        max_frames, &frames_read);
+    const ma_result result =
+        ma_decoder_read_pcm_frames(&impl_->decoder.get(), out.data(), max_frames, &frames_read);
     if (result != MA_SUCCESS && result != MA_AT_END) {
         throw std::runtime_error("WAV read failed for " + impl_->what + ": " +
                                  ma_result_description(result));

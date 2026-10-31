@@ -257,26 +257,27 @@ TEST_CASE("sink calls that would wait on their own call are refused, not deadloc
     ts::LiveVad vad;
     std::unique_ptr<echoir::Session> session;
     std::atomic<int> refused{0};
-    session = std::make_unique<echoir::Session>(
-        backend, vad, SessionConfig{}, [&](const SessionEvent& ev) {
-            // flush() delivers this FINAL on the calling thread, with its own lock held.
-            if (ev.type != ECHOIR_EVENT_FINAL) return;
-            try {
-                session->flush();
-            } catch (const echoir::StateError&) {
-                ++refused;
-            }
-            try {
-                session->stop();
-            } catch (const echoir::StateError&) {
-                ++refused;
-            }
-            try {
-                session->clear();
-            } catch (const echoir::StateError&) {
-                ++refused;
-            }
-        });
+    session = std::make_unique<echoir::Session>(backend, vad, SessionConfig{},
+                                                [&](const SessionEvent& ev) {
+                                                    // flush() delivers this FINAL on the calling
+                                                    // thread, with its own lock held.
+                                                    if (ev.type != ECHOIR_EVENT_FINAL) return;
+                                                    try {
+                                                        session->flush();
+                                                    } catch (const echoir::StateError&) {
+                                                        ++refused;
+                                                    }
+                                                    try {
+                                                        session->stop();
+                                                    } catch (const echoir::StateError&) {
+                                                        ++refused;
+                                                    }
+                                                    try {
+                                                        session->clear();
+                                                    } catch (const echoir::StateError&) {
+                                                        ++refused;
+                                                    }
+                                                });
     std::size_t phase = 0;
     session->push(audio(1000, true, phase), 16000, 1);
     session->flush();

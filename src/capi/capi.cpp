@@ -183,8 +183,7 @@ std::unique_ptr<echoir_engine> make_engine(const echoir_engine_params& params) {
                                                : std::filesystem::path();
     std::unique_ptr<echoir::vad::IVad> vad =
         echoir::vad::make_vad(vad_path, 2, {}, echoir::vad::VadUse::streaming);
-    return std::unique_ptr<echoir_engine>(
-        new echoir_engine{std::move(backend), std::move(vad)});
+    return std::unique_ptr<echoir_engine>(new echoir_engine{std::move(backend), std::move(vad)});
 }
 
 // Resolves the model files that params names, then loads them as make_engine does. A field after
@@ -300,9 +299,9 @@ const char* echoir_models_json(const char* registry_json, const char* models_dir
         const echoir::models::Registry registry =
             registry_json != nullptr ? echoir::models::Registry::parse(registry_json)
                                      : echoir::models::Registry::builtin();
-        const std::filesystem::path dir =
-            models_dir != nullptr ? echoir::text::path_from_utf8(models_dir)
-                                  : std::filesystem::path();
+        const std::filesystem::path dir = models_dir != nullptr
+                                              ? echoir::text::path_from_utf8(models_dir)
+                                              : std::filesystem::path();
 #ifdef ECHOIR_HAS_ENGINE
         const std::vector<echoir::models::Device> devices = echoir::models::query_devices();
 #else

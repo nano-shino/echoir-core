@@ -35,9 +35,9 @@ AudioContext::AudioContext() {
     ma_context_config config = ma_context_config_init();
     // iOS: record and play at once, mixed with other audio, with output on the speaker.
     config.coreaudio.sessionCategory = ma_ios_session_category_play_and_record;
-    config.coreaudio.sessionCategoryOptions = static_cast<ma_uint32>(
-        ma_ios_session_category_option_mix_with_others |
-        ma_ios_session_category_option_default_to_speaker);
+    config.coreaudio.sessionCategoryOptions =
+        static_cast<ma_uint32>(ma_ios_session_category_option_mix_with_others |
+                               ma_ios_session_category_option_default_to_speaker);
 
     ma_result result = MA_SUCCESS;
     const std::optional<std::string> forced = text::get_env("ECHOIR_AUDIO_BACKEND");

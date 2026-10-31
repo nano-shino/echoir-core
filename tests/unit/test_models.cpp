@@ -95,7 +95,7 @@ TEST_CASE("a file is present when it has the size the catalogue gives") {
     dir.write("fake.bin", 5);
     CHECK_FALSE(echoir::models::is_present(dir.path(), *model));  // wrong size
     dir.write("fake.bin", 4);
-    CHECK(echoir::models::is_present(dir.path(), *model));  // right size
+    CHECK(echoir::models::is_present(dir.path(), *model));        // right size
     CHECK_FALSE(echoir::models::is_present(fs::path(), *model));  // no directory
 
     const Model* vad = registry.find("fake-vad");
@@ -118,8 +118,7 @@ TEST_CASE("resolve names the file and the id when the file is missing or short")
     CHECK(missing.find("tools/fetch-models.sh fake-asr") != std::string::npos);
 
     dir.write("fake.bin", 2);
-    std::string short_file =
-        error_of([&] { echoir::models::resolve(dir.path(), model, "model"); });
+    std::string short_file = error_of([&] { echoir::models::resolve(dir.path(), model, "model"); });
     CHECK(short_file.find("fake.bin") != std::string::npos);
     CHECK(short_file.find("fake-asr") != std::string::npos);
     CHECK(short_file.find("2 bytes") != std::string::npos);
@@ -132,19 +131,16 @@ TEST_CASE("resolve throws a model load error for a missing or short file") {
     const TempDir dir;
     const Registry registry = Registry::parse(kCustomRegistry);
     const Model& model = *registry.find("fake-asr");
-    CHECK_THROWS_AS(echoir::models::resolve(dir.path(), model, "model"),
-                    echoir::ModelLoadError);
+    CHECK_THROWS_AS(echoir::models::resolve(dir.path(), model, "model"), echoir::ModelLoadError);
     dir.write("fake.bin", 3);
-    CHECK_THROWS_AS(echoir::models::resolve(dir.path(), model, "model"),
-                    echoir::ModelLoadError);
+    CHECK_THROWS_AS(echoir::models::resolve(dir.path(), model, "model"), echoir::ModelLoadError);
 }
 #endif
 
 TEST_CASE("resolve rejects a role the entry does not have") {
     const Registry registry = Registry::builtin();
     const Model& model = *registry.find("whisper-tiny-en");
-    CHECK_THROWS_AS(echoir::models::resolve(fs::path("."), model, "mmproj"),
-                    std::invalid_argument);
+    CHECK_THROWS_AS(echoir::models::resolve(fs::path("."), model, "mmproj"), std::invalid_argument);
 }
 
 TEST_CASE("default VADs are per backend key, and speech backends map to a key") {
@@ -180,8 +176,8 @@ TEST_CASE("the catalogue JSON reports presence, default VADs and fit per device"
         {"cpu", false, 16000, 8000},
         {"gpu", true, 8000, 1000, "Test GPU", false},
     };
-    const nlohmann::json doc = nlohmann::json::parse(
-        echoir::models::catalogue_json(registry, dir.path(), devices));
+    const nlohmann::json doc =
+        nlohmann::json::parse(echoir::models::catalogue_json(registry, dir.path(), devices));
 
     REQUIRE(doc.at("devices").size() == 2);
     CHECK(doc.at("devices")[0].at("type") == "cpu");
@@ -196,7 +192,7 @@ TEST_CASE("the catalogue JSON reports presence, default VADs and fit per device"
     CHECK(asr.at("id") == "fake-asr");
     CHECK(asr.at("present") == true);
     CHECK(asr.at("files")[0].at("present") == true);
-    CHECK(asr.at("fits") == true);  // no min_vram_mb: fits
+    CHECK(asr.at("fits") == true);                      // no min_vram_mb: fits
     CHECK(doc.at("models")[1].at("present") == false);  // vad file not written
 
     const Registry builtin = Registry::builtin();

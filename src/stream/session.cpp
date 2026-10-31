@@ -542,10 +542,9 @@ std::size_t Session::analyze(const std::vector<float>& window, bool finish, std:
         if (end - start >= max_segment_samples_) {
             forced = true;
             const std::int64_t cap = start + max_segment_samples_;
-            end = static_cast<std::int64_t>(
-                stream::find_cut(window, static_cast<std::size_t>(start),
-                                 static_cast<std::size_t>(cap), static_cast<std::size_t>(end),
-                                 stream::kCutSearchStream));
+            end = static_cast<std::int64_t>(stream::find_cut(
+                window, static_cast<std::size_t>(start), static_cast<std::size_t>(cap),
+                static_cast<std::size_t>(end), stream::kCutSearchStream));
             end_time = end;
         }
         const bool ongoing = at_tail && !forced;
@@ -581,8 +580,8 @@ std::size_t Session::analyze(const std::vector<float>& window, bool finish, std:
         // decodes to it again. Audio that decodes to something else holds no words the decoder
         // can agree on, such as noise or a fade-out, so it decodes to nothing.
         if (!at_seam && !st.prompts.empty() && text::echoes_history(clean, st.prompts)) {
-            DecodeRequest retry{request.pcm, no_history, request.language, request.context,
-                                request.prefix, request.rollback_tokens};
+            DecodeRequest retry{request.pcm,     no_history,     request.language,
+                                request.context, request.prefix, request.rollback_tokens};
             decoded = backend_.decode(retry);
             raw = utf8_to_utf32(decoded.text);
             clean = text::clean_segment(raw);

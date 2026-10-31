@@ -126,7 +126,7 @@ def check_stdin_spec(case_id, spec):
         return
     if not isinstance(spec, dict) or set(spec) != {"pcm", "rate", "channels"}:
         raise Usage(
-            f"case {case_id!r}: stdin must be \"wav\" or an object with pcm, rate and channels"
+            f'case {case_id!r}: stdin must be "wav" or an object with pcm, rate and channels'
         )
     if spec["pcm"] not in RAW_PCM_FORMATS:
         raise Usage(f"case {case_id!r}: stdin pcm must be one of {', '.join(RAW_PCM_FORMATS)}")
@@ -149,9 +149,7 @@ def check_case(case):
         if case["policy"] not in POLICIES:
             raise Usage(f"case {case_id!r}: policy must be one of {', '.join(POLICIES)}")
         if case["mode"] not in POLICY_MODES:
-            raise Usage(
-                f"case {case_id!r}: policy needs a stream, realtime, stdin or serve mode"
-            )
+            raise Usage(f"case {case_id!r}: policy needs a stream, realtime, stdin or serve mode")
     if "stdin" in case:
         if case["mode"] != "stdin":
             raise Usage(f"case {case_id!r}: stdin needs the stdin mode")
@@ -301,8 +299,15 @@ def resample(plane, src_rate, dst_rate):
     out = []
     for j in range(len(plane) * dst_rate // src_rate):
         base, phase = divmod(j * down, up)
-        out.append(sum(map(operator.mul, padded[base + 1:base + 1 + 2 * RESAMPLE_HALF_TAPS],
-                           kernels[phase])))
+        out.append(
+            sum(
+                map(
+                    operator.mul,
+                    padded[base + 1 : base + 1 + 2 * RESAMPLE_HALF_TAPS],
+                    kernels[phase],
+                )
+            )
+        )
     return out
 
 
@@ -323,8 +328,7 @@ def fixture_as_raw_pcm(path, spec):
     if sys.byteorder == "big":
         samples.byteswap()
     planes = [
-        resample(samples[c::src_channels], src_rate, spec["rate"])
-        for c in range(src_channels)
+        resample(samples[c::src_channels], src_rate, spec["rate"]) for c in range(src_channels)
     ]
     if src_channels != spec["channels"]:
         mono = [sum(frame) / src_channels for frame in zip(*planes)]
@@ -344,7 +348,12 @@ def stdin_input(case, fixture):
     if spec == "wav":
         return fixture.read_bytes(), []
     options = [
-        "--pcm", spec["pcm"], "--rate", str(spec["rate"]), "--channels", str(spec["channels"]),
+        "--pcm",
+        spec["pcm"],
+        "--rate",
+        str(spec["rate"]),
+        "--channels",
+        str(spec["channels"]),
     ]
     return fixture_as_raw_pcm(fixture, spec), options
 
@@ -360,8 +369,17 @@ def transcribe(echoir, case, fixture, models_dir, vad, vad_params, context_file)
     else:
         source = [str(fixture)]
     args = [
-        echoir, "transcribe", *source, "--backend", case["backend"],
-        "--model", case["model"], "--vad", vad, "--models-dir", str(models_dir),
+        echoir,
+        "transcribe",
+        *source,
+        "--backend",
+        case["backend"],
+        "--model",
+        case["model"],
+        "--vad",
+        vad,
+        "--models-dir",
+        str(models_dir),
     ]
     if context_file is not None:
         args += ["--context-file", str(context_file)]
@@ -444,12 +462,14 @@ def serve_commands(case, fixture, vad, context_file):
     rate, channels, chunks = serve_chunks(fixture)
     commands = [load, start]
     for chunk in chunks:
-        commands.append({
-            "cmd": "audio",
-            "pcm_s16le_b64": base64.b64encode(chunk).decode("ascii"),
-            "rate": rate,
-            "channels": channels,
-        })
+        commands.append(
+            {
+                "cmd": "audio",
+                "pcm_s16le_b64": base64.b64encode(chunk).decode("ascii"),
+                "rate": rate,
+                "channels": channels,
+            }
+        )
     commands += [{"cmd": "flush"}, {"cmd": "stop"}, {"cmd": "quit"}]
     return commands
 
@@ -462,7 +482,8 @@ def serve_transcript(echoir, case, fixture, models_dir, vad, vad_params, context
     script = "".join(json.dumps(command) + "\n" for command in commands).encode("utf-8")
     output = run_tool(
         [echoir, "serve", "--stdio", "--models-dir", str(models_dir)],
-        "echoir serve", stdin=script,
+        "echoir serve",
+        stdin=script,
     )
     return serve_events(output, [command["cmd"] for command in commands])
 
@@ -512,7 +533,8 @@ def normalize(echoir, path=None, text=None):
         out = run_tool([echoir, "score", "--normalize", str(path)], "echoir score --normalize")
     else:
         out = run_tool(
-            [echoir, "score", "--normalize", "-"], "echoir score --normalize -",
+            [echoir, "score", "--normalize", "-"],
+            "echoir score --normalize -",
             stdin=text.encode("utf-8"),
         )
     return out.strip()
@@ -629,11 +651,15 @@ def main(argv=None):
         help="VAD registry id (default: the registry's default_vad for the case's backend)",
     )
     parser.add_argument(
-        "--vad-param", action="append", default=[], metavar="KEY=VALUE",
+        "--vad-param",
+        action="append",
+        default=[],
+        metavar="KEY=VALUE",
         help="a VAD setting for echoir transcribe; repeatable",
     )
     parser.add_argument(
-        "--show-text", action="store_true",
+        "--show-text",
+        action="store_true",
         help="on a failure, also print the transcript and the reference",
     )
     parser.add_argument("--source-dir", help="repository root (default: this script's)")
@@ -661,7 +687,13 @@ def main(argv=None):
         cases = load_cases(cases_path)
         case = find_case(cases, args.case)
         return run_case(
-            args.echoir, case, cases, search_dirs, models_dir, args.vad, args.vad_param,
+            args.echoir,
+            case,
+            cases,
+            search_dirs,
+            models_dir,
+            args.vad,
+            args.vad_param,
             args.show_text,
         )
     except Usage as e:

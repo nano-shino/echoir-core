@@ -165,7 +165,7 @@ def _tensor_bytes(zf, prefix, ref, raw_cache, name):
     # Checked on every reference: storages that share a key must agree on the record length.
     if len(raw) != storage.numel * 4:
         raise ConvertError(f"storage {storage.key} is not {storage.numel} float32 values")
-    return raw[ref.offset * 4:(ref.offset + numel) * 4]
+    return raw[ref.offset * 4 : (ref.offset + numel) * 4]
 
 
 def load_checkpoint(path):
@@ -180,7 +180,7 @@ def load_checkpoint(path):
         pkl = [n for n in names if n == "data.pkl" or n.endswith("/data.pkl")]
         if len(pkl) != 1:
             raise ConvertError(f"{path} has no single data.pkl record")
-        prefix = pkl[0][:-len("data.pkl")]
+        prefix = pkl[0][: -len("data.pkl")]
         if prefix + "byteorder" in names:
             try:
                 byteorder = zf.read(prefix + "byteorder")
@@ -301,7 +301,7 @@ def read_cmvn(path, idim):
 
 
 def _kaldi_int(raw, pos, path):
-    if len(raw) < pos + 5 or raw[pos:pos + 1] != b"\x04":
+    if len(raw) < pos + 5 or raw[pos : pos + 1] != b"\x04":
         raise ConvertError(f"{path} has a malformed Kaldi header")
     return struct.unpack_from("<i", raw, pos + 1)[0], pos + 5
 
@@ -347,8 +347,19 @@ def build_gguf(hp, name, tensors):
 
 
 class _Reader:
-    _SCALARS = {0: "<B", 1: "<b", 2: "<H", 3: "<h", 4: "<I", 5: "<i", 6: "<f", 7: "<?",
-                10: "<Q", 11: "<q", 12: "<d"}
+    _SCALARS = {
+        0: "<B",
+        1: "<b",
+        2: "<H",
+        3: "<h",
+        4: "<I",
+        5: "<i",
+        6: "<f",
+        7: "<?",
+        10: "<Q",
+        11: "<q",
+        12: "<d",
+    }
 
     def __init__(self, data):
         self.data = data
@@ -357,7 +368,7 @@ class _Reader:
     def take(self, n):
         if n < 0 or self.pos + n > len(self.data):
             raise ConvertError("GGUF file is truncated")
-        chunk = self.data[self.pos:self.pos + n]
+        chunk = self.data[self.pos : self.pos + n]
         self.pos += n
         return chunk
 
