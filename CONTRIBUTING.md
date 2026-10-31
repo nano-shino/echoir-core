@@ -32,6 +32,16 @@ tools/fetch-models.sh whisper-tiny-en silero-v6.2.0 firered-vad-v1
 
 The generated test audio is built with `python3 -I tools/make-fixtures.py`, which runs on any host.
 
+## Lint
+
+```sh
+tools/lint.sh          # the linters on every file, the formatters on the files you changed
+tools/lint.sh --all    # the formatters on every file too; some older files do not pass yet
+```
+
+The script refuses to run unless the tools are the versions pinned in `tools/lint-versions.env`,
+which CI installs too.
+
 ## Style
 
 - Format C++ with the `.clang-format` at the root: Google base, 4-space indent, 100 columns.

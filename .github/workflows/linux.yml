@@ -6,7 +6,7 @@ name: linux
 
 on:
   push:
-    branches: [main, "ci/**"]
+    branches: [main]
     paths-ignore: &unbuilt
       - "**.md"
       - "docs/**"

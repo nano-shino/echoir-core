@@ -1,0 +1,57 @@
+# Lint and format checks, run by tools/lint.sh. Every file gets the linters: shellcheck, actionlint
+# and ruff check. The formatters, clang-format and ruff format, check the files a change touches,
+# because some files predate the rules. The tool versions are in tools/lint-versions.env.
+name: lint
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+concurrency:
+  group: lint-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  lint:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    steps:
+      # The base branch is needed to find the files a change touches.
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # Each KEY=VALUE line of the file becomes an environment variable for the later steps.
+      - name: Read the tool versions
+        run: grep -E '^[A-Z0-9_]+=' tools/lint-versions.env >> "$GITHUB_ENV"
+
+      - name: Install clang-format and ruff
+        run: |
+          python3 -m venv "$RUNNER_TEMP/lint-venv"
+          "$RUNNER_TEMP/lint-venv/bin/pip" install \
+            "clang-format==$CLANG_FORMAT_VERSION" "ruff==$RUFF_VERSION"
+          echo "$RUNNER_TEMP/lint-venv/bin" >> "$GITHUB_PATH"
+
+      # The archives are checked against their SHA-256 before they are unpacked.
+      - name: Install shellcheck and actionlint
+        run: |
+          mkdir -p "$RUNNER_TEMP/bin" "$RUNNER_TEMP/download"
+          cd "$RUNNER_TEMP/download"
+          shellcheck="shellcheck-v$SHELLCHECK_VERSION.linux.x86_64.tar.xz"
+          curl -fsSLO "https://github.com/koalaman/shellcheck/releases/download/v$SHELLCHECK_VERSION/$shellcheck"
+          echo "$SHELLCHECK_SHA256  $shellcheck" | sha256sum -c -
+          tar -xJf "$shellcheck" -C "$RUNNER_TEMP/bin" --strip-components=1 \
+            "shellcheck-v$SHELLCHECK_VERSION/shellcheck"
+          actionlint="actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
+          curl -fsSLO "https://github.com/rhysd/actionlint/releases/download/v$ACTIONLINT_VERSION/$actionlint"
+          echo "$ACTIONLINT_SHA256  $actionlint" | sha256sum -c -
+          tar -xzf "$actionlint" -C "$RUNNER_TEMP/bin" actionlint
+          echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
+
+      - name: Lint
+        run: tools/lint.sh origin/main

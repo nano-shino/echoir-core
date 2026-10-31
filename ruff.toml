@@ -1,0 +1,6 @@
+# Python settings for tools/ and tests/e2e/. Lines match the C++ limit in .clang-format.
+line-length = 100
+
+[lint]
+# The pyflakes checks and the errors that stop a script from running. Style rules are not enforced.
+select = ["E4", "E7", "E9", "F"]
