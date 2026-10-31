@@ -371,9 +371,9 @@ FireRedModel::FireRedModel(const std::filesystem::path& model, int n_threads)
     }
     // ggml's workers spin on barriers, so more threads than cores make every step slower.
     const unsigned cores = std::thread::hardware_concurrency();
-    auto set_n_threads = reinterpret_cast<ggml_backend_set_n_threads_t>(
-        ggml_backend_reg_get_proc_address(ggml_backend_dev_backend_reg(cpu),
-                                          "ggml_backend_set_n_threads"));
+    auto set_n_threads =
+        reinterpret_cast<ggml_backend_set_n_threads_t>(ggml_backend_reg_get_proc_address(
+            ggml_backend_dev_backend_reg(cpu), "ggml_backend_set_n_threads"));
     if (set_n_threads != nullptr) {
         set_n_threads(impl.backend.get(),
                       cores > 0 ? std::min(n_threads, static_cast<int>(cores)) : n_threads);

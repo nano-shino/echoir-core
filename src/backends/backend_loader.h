@@ -1,5 +1,6 @@
 // ggml's backends, when they are separate modules. A GGML_BACKEND_DL build (Android) ships the
-// CPU backend in several variants, one per set of ARM features, and loads the best one the CPU runs.
+// CPU backend in several variants, one per set of ARM features, and loads the best one the CPU
+// runs.
 #pragma once
 
 namespace echoir::backends {
