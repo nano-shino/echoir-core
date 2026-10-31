@@ -42,8 +42,7 @@ whisper_vad_params vad_params(const SileroSettings& s, VadUse use) {
     p.threshold = s.threshold;
     p.min_speech_duration_ms = 100;
     p.min_silence_duration_ms = s.min_silence_ms;
-    p.max_speech_duration_s =
-        use == VadUse::streaming ? std::numeric_limits<float>::max() : 15.0f;
+    p.max_speech_duration_s = use == VadUse::streaming ? std::numeric_limits<float>::max() : 15.0f;
     p.speech_pad_ms = s.speech_pad_ms;
     p.samples_overlap = 0.1f;
     return p;
@@ -223,10 +222,9 @@ std::vector<Range> SileroVad::detect(std::span<const float> pcm16k_mono) {
     }
 
     const whisper_vad_params params = vad_params(settings_, use_);
-    SegmentList segments(
-        whisper_vad_segments_from_samples(ctx_.get(), params, pcm16k_mono.data(),
-                                          static_cast<int>(pcm16k_mono.size())),
-        &whisper_vad_free_segments);
+    SegmentList segments(whisper_vad_segments_from_samples(ctx_.get(), params, pcm16k_mono.data(),
+                                                           static_cast<int>(pcm16k_mono.size())),
+                         &whisper_vad_free_segments);
     // A null list is an error. A list with no entries means no speech.
     if (!segments) {
         throw std::runtime_error("VAD failed to detect speech");

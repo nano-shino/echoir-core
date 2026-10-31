@@ -10,10 +10,10 @@
 
 #include "input.h"
 #include "model_dirs.h"
-#include "offline.h"
-#include "options.h"
 #include "models/registry.h"
 #include "models/resolve.h"
+#include "offline.h"
+#include "options.h"
 #include "score.h"
 #include "text/score.h"
 #include "text/utf.h"

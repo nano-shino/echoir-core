@@ -239,10 +239,9 @@ struct CaptureFeed::Impl {
         }
         const ma_device* device = notification->pDevice;
         const bool stopped = notification->type == ma_device_notification_type_stopped;
-        const bool format_changed =
-            notification->type == ma_device_notification_type_rerouted &&
-            (device->sampleRate != self->rate_.load() ||
-             device->capture.channels != self->channels_.load());
+        const bool format_changed = notification->type == ma_device_notification_type_rerouted &&
+                                    (device->sampleRate != self->rate_.load() ||
+                                     device->capture.channels != self->channels_.load());
         if (stopped || format_changed) {
             self->suspended_ = true;
             self->reopen_needed_ = true;
@@ -265,8 +264,7 @@ struct CaptureFeed::Impl {
                 fill_gap();
                 waiting_ = attempt >= kQuickReopenAttempts;
                 std::unique_lock<std::mutex> lock(wake_mu_);
-                wake_cv_.wait_for(lock,
-                                  waiting_ ? kSlowReopenInterval : kQuickReopenInterval,
+                wake_cv_.wait_for(lock, waiting_ ? kSlowReopenInterval : kQuickReopenInterval,
                                   [this] { return stop_requested_.load(); });
             }
             std::lock_guard<std::mutex> lock(device_mu_);
@@ -387,8 +385,8 @@ struct CaptureFeed::Impl {
     AudioContext context_;  // declared before the device, so it outlives it
 
     std::mutex device_mu_;
-    std::unique_ptr<ma_device> device_;              // device_mu_
-    std::unique_ptr<audio::SpscRing<float>> ring_;   // see above
+    std::unique_ptr<ma_device> device_;             // device_mu_
+    std::unique_ptr<audio::SpscRing<float>> ring_;  // see above
     std::atomic<std::uint32_t> rate_{0};
     std::atomic<std::uint32_t> channels_{0};
     // The device is being closed on purpose, so its notifications are not a loss.
@@ -416,7 +414,7 @@ struct CaptureFeed::Impl {
     std::vector<float> silence_;  // feeder thread only
     GapFill gap_{kGapIdle};       // started by the owner thread, then feeder thread only
     bool started_ = false;        // owner thread only
-    bool stopped_ = false;       // owner thread only
+    bool stopped_ = false;        // owner thread only
 };
 
 CaptureFeed::CaptureFeed(Source source, const std::string& device_id, Session& session)

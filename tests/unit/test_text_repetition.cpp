@@ -83,9 +83,9 @@ TEST_CASE("drop_seam_repeat: the leading words that repeat the end of the text b
 }
 
 TEST_CASE("drop_seam_repeat: Unicode punctuation and case are ignored, word order is not") {
-    CHECK(drop_seam_repeat(U"\u00ABRespond\u00BB to them.", U"they respond\u2026") ==
-          U"to them.");
-    CHECK(drop_seam_repeat(U"\u00C9t\u00E9 encore.", U"l'\u00E9t\u00E9") == U"\u00C9t\u00E9 encore.");
+    CHECK(drop_seam_repeat(U"\u00ABRespond\u00BB to them.", U"they respond\u2026") == U"to them.");
+    CHECK(drop_seam_repeat(U"\u00C9t\u00E9 encore.", U"l'\u00E9t\u00E9") ==
+          U"\u00C9t\u00E9 encore.");
     CHECK(drop_seam_repeat(U"ships passing to", U"to passing ships") == U"passing to");
     CHECK(drop_seam_repeat(U"respondent today", U"they respond") == U"respondent today");
 }

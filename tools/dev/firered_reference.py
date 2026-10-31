@@ -179,8 +179,10 @@ def reference(args):
     fbank_dump = min(n_frames, FBANK_DUMP_FRAMES)
     write_f32(f"{out_prefix}.fbank.f32", fbank[:fbank_dump])
     write_f32(f"{out_prefix}.feat.f32", feat_f32)
-    write_f32(os.path.join(out_dir, "cmvn.f32"),
-              np.concatenate([audio_feat.cmvn.means, audio_feat.cmvn.inverse_std_variances]))
+    write_f32(
+        os.path.join(out_dir, "cmvn.f32"),
+        np.concatenate([audio_feat.cmvn.means, audio_feat.cmvn.inverse_std_variances]),
+    )
 
     summary = {
         "clip": clip,
@@ -193,8 +195,9 @@ def reference(args):
         "segments": {},
     }
     for v in variants:
-        model = load_detect_model(DetectModel, os.path.join(args.model_dir, VARIANT_DIRS[v],
-                                                            "model.pth.tar"))
+        model = load_detect_model(
+            DetectModel, os.path.join(args.model_dir, VARIANT_DIRS[v], "model.pth.tar")
+        )
         with torch.no_grad():
             probs, _ = model(torch.from_numpy(feat_f32).unsqueeze(0))
         probs_list = probs.cpu().reshape(-1).tolist()
@@ -208,13 +211,16 @@ def reference(args):
         ranges = post.decision_to_segment(post.process(probs_list), dur)
 
         write_f32(f"{out_prefix}.{v}.probs.f32", probs_list)
-        write_json(f"{out_prefix}.{v}.ranges.json", {
-            "model": VARIANT_DIRS[v],
-            "params": params,
-            "frames": n_frames,
-            "duration_s": dur,
-            "ranges": [[s, e] for s, e in ranges],
-        })
+        write_json(
+            f"{out_prefix}.{v}.ranges.json",
+            {
+                "model": VARIANT_DIRS[v],
+                "params": params,
+                "frames": n_frames,
+                "duration_s": dur,
+                "ranges": [[s, e] for s, e in ranges],
+            },
+        )
         summary["shapes"][f"{v}_probs"] = [n_frames]
         summary["segments"][v] = len(ranges)
         print(f"{clip} {v}: {n_frames} frames, {len(ranges)} ranges")
@@ -224,17 +230,25 @@ def reference(args):
 
 def parse_args(argv):
     parser = argparse.ArgumentParser(description=__doc__.split("\n\n")[0])
-    parser.add_argument("--make-tone-noise", metavar="WAV",
-                        help="write the synthetic tone_noise clip and exit")
-    parser.add_argument("--variants", default="vad,stream",
-                        help="comma-separated subset of vad, stream (default: both)")
+    parser.add_argument(
+        "--make-tone-noise", metavar="WAV", help="write the synthetic tone_noise clip and exit"
+    )
+    parser.add_argument(
+        "--variants",
+        default="vad,stream",
+        help="comma-separated subset of vad, stream (default: both)",
+    )
     parser.add_argument("repo", nargs="?", help="FireRedVAD checkout")
     parser.add_argument("model_dir", nargs="?", help="directory with VAD/ and Stream-VAD/")
     parser.add_argument("wav", nargs="?", help="16 kHz single-channel 16-bit WAV")
     parser.add_argument("out_prefix", nargs="?", help="output prefix, e.g. dir/clip")
     args = parser.parse_args(argv)
-    if args.make_tone_noise is None and None in (args.repo, args.model_dir, args.wav,
-                                                  args.out_prefix):
+    if args.make_tone_noise is None and None in (
+        args.repo,
+        args.model_dir,
+        args.wav,
+        args.out_prefix,
+    ):
         parser.error("give REPO MODEL_DIR WAV OUT_PREFIX, or --make-tone-noise WAV")
     return args
 

@@ -20,10 +20,10 @@ import tempfile
 import wave
 
 RATE = 16000
-FRAME = RATE // 100                 # 10 ms analysis frames
-RUNON_KEEP_PAUSE_MS = 120           # a longer pause inside runon_en is cut down to this
-RUNON_MAX_PAUSE_MS = 200            # runon_en must have no pause over this after shortening
-LOW_ENERGY_DB = -40.0               # a 10 ms frame below this RMS counts as low energy
+FRAME = RATE // 100  # 10 ms analysis frames
+RUNON_KEEP_PAUSE_MS = 120  # a longer pause inside runon_en is cut down to this
+RUNON_MAX_PAUSE_MS = 200  # runon_en must have no pause over this after shortening
+LOW_ENERGY_DB = -40.0  # a 10 ms frame below this RMS counts as low energy
 
 ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), ".."))
 CLIPS = os.path.join(ROOT, "tests", "fixtures")
@@ -69,7 +69,7 @@ def load_clip(name):
 def frame_levels_db(samples):
     levels = []
     for start in range(0, len(samples), FRAME):
-        seg = samples[start:start + FRAME]
+        seg = samples[start : start + FRAME]
         rms = math.sqrt(sum(v * v for v in seg) / len(seg)) / 32768.0
         levels.append(20.0 * math.log10(rms) if rms > 0 else -200.0)
     return levels
@@ -94,7 +94,7 @@ def shorten_pauses(samples, keep_ms):
     while i < len(levels):
         start = i * FRAME
         if levels[i] >= LOW_ENERGY_DB:
-            out.extend(samples[start:min(len(samples), (i + 1) * FRAME)])
+            out.extend(samples[start : min(len(samples), (i + 1) * FRAME)])
             i += 1
             continue
         j = i
@@ -104,8 +104,8 @@ def shorten_pauses(samples, keep_ms):
         run = end - start
         if run > keep:
             head = keep // 2
-            out.extend(samples[start:start + head])
-            out.extend(samples[end - (keep - head):end])
+            out.extend(samples[start : start + head])
+            out.extend(samples[end - (keep - head) : end])
             removed += run - keep
         else:
             out.extend(samples[start:end])
@@ -118,9 +118,11 @@ def build(stage):
     ep407, ep407_ref = load_clip("pd_nasa_ep407")
     runon, removed = shorten_pauses(ep407, RUNON_KEEP_PAUSE_MS)
     worst = longest_low_run_ms(runon)
-    print("runon_en: longest low-energy run %d ms before shortening, %d ms after (limit %d ms);"
-          " %d ms of silence cut" % (longest_low_run_ms(ep407), worst, RUNON_MAX_PAUSE_MS,
-                                     removed * 1000 // RATE))
+    print(
+        "runon_en: longest low-energy run %d ms before shortening, %d ms after (limit %d ms);"
+        " %d ms of silence cut"
+        % (longest_low_run_ms(ep407), worst, RUNON_MAX_PAUSE_MS, removed * 1000 // RATE)
+    )
     if worst > RUNON_MAX_PAUSE_MS:
         raise SystemExit("runon_en has a pause over %d ms" % RUNON_MAX_PAUSE_MS)
     write_wav(os.path.join(stage, "runon_en.wav"), runon)

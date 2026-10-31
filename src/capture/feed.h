@@ -21,10 +21,10 @@ namespace capture {
 class CaptureFeed {
 public:
     // Opens the device without starting it. An empty device_id is the system default, and the
-    // capture follows it when it changes; when there is none, it waits for one. Otherwise device_id is an id from list_devices(). Throws
-    // NotSupported for loopback on an audio backend without it, std::invalid_argument for an id
-    // that no device has, and std::runtime_error when the device cannot open. The session must
-    // outlive the feed.
+    // capture follows it when it changes; when there is none, it waits for one. Otherwise device_id
+    // is an id from list_devices(). Throws NotSupported for loopback on an audio backend without
+    // it, std::invalid_argument for an id that no device has, and std::runtime_error when the
+    // device cannot open. The session must outlive the feed.
     CaptureFeed(Source source, const std::string& device_id, Session& session);
     // Stops the capture, as stop() does.
     ~CaptureFeed();

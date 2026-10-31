@@ -150,10 +150,28 @@ def measure(echoir, case, fixture, ref, context, models_dir, job):
     """Runs one streaming transcription and returns its metrics as one record."""
     model, vad, policy, min_chunk_ms, audio_s = job
     args = [
-        echoir, "transcribe", str(fixture), "--backend", case["backend"], "--model", model,
-        "--vad", vad, "--models-dir", str(models_dir), "--stream", "--pace", "none",
-        "--format", "jsonl", "--policy", policy, "--min-chunk-ms", str(min_chunk_ms),
-        "--chunk-ms", str(PUSH_MS),
+        echoir,
+        "transcribe",
+        str(fixture),
+        "--backend",
+        case["backend"],
+        "--model",
+        model,
+        "--vad",
+        vad,
+        "--models-dir",
+        str(models_dir),
+        "--stream",
+        "--pace",
+        "none",
+        "--format",
+        "jsonl",
+        "--policy",
+        policy,
+        "--min-chunk-ms",
+        str(min_chunk_ms),
+        "--chunk-ms",
+        str(PUSH_MS),
     ]
     if context is not None:
         args += ["--context-file", str(context)]
@@ -193,17 +211,25 @@ def parse_args(argv):
     )
     parser.add_argument("--echoir", required=True, help="the echoir binary")
     parser.add_argument(
-        "--case", action="append", required=True, metavar="ID",
+        "--case",
+        action="append",
+        required=True,
+        metavar="ID",
         help="a case id from the cases file; repeatable",
     )
     parser.add_argument("--cases", help="cases file (default: tests/e2e/cases.json)")
     parser.add_argument("--model", help="registry id that replaces the model of every case")
     parser.add_argument(
-        "--policy", action="append", choices=POLICIES,
+        "--policy",
+        action="append",
+        choices=POLICIES,
         help="stabilization policy; repeatable (default: both)",
     )
     parser.add_argument(
-        "--min-chunk-ms", action="append", type=int, metavar="MS",
+        "--min-chunk-ms",
+        action="append",
+        type=int,
+        metavar="MS",
         help="minimum pending audio before a decode, in ms; repeatable (default: 500, 1000, 2000)",
     )
     parser.add_argument(
@@ -223,8 +249,11 @@ def main(argv=None):
     try:
         cases_path = Path(args.cases) if args.cases else REPO / "tests" / "e2e" / "cases.json"
         models_dir = Path(args.models_dir or os.environ.get("ECHOIR_MODELS") or REPO / "models")
-        search_dirs = [cases_path.resolve().parent, REPO / "tests" / "fixtures",
-                       REPO / "build" / "fixtures"]
+        search_dirs = [
+            cases_path.resolve().parent,
+            REPO / "tests" / "fixtures",
+            REPO / "build" / "fixtures",
+        ]
         cases = load_cases(cases_path)
 
         # Each case is resolved once, so a missing file fails before the first run.
@@ -255,7 +284,8 @@ def main(argv=None):
                         f"wer {record['wer']:.4f}, rtf {record['rtf']:.3f}, "
                         f"rewrites {record['rewrites']}/{record['updates']}, "
                         f"partials {record['partials']}, {record['wall_s']:.1f} s",
-                        file=sys.stderr, flush=True,
+                        file=sys.stderr,
+                        flush=True,
                     )
     except Usage as e:
         print(f"error: {e}", file=sys.stderr)

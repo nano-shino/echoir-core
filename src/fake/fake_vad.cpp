@@ -58,8 +58,6 @@ private:
 
 }  // namespace
 
-std::unique_ptr<vad::IVad> make_vad() {
-    return std::make_unique<FakeVad>(segment_ms_from_env());
-}
+std::unique_ptr<vad::IVad> make_vad() { return std::make_unique<FakeVad>(segment_ms_from_env()); }
 
 }  // namespace echoir::fake

@@ -125,8 +125,7 @@ void run_capture(const TranscribeOptions& o, const std::vector<fs::path>& model_
 
     const double seconds = static_cast<double>(feed.frames_delivered()) / rate;
     std::fprintf(stderr, "captured %s (%d Hz, %d ch): %.1f s, %llu frames dropped\n", name.c_str(),
-                 rate, channels, seconds,
-                 static_cast<unsigned long long>(feed.dropped_frames()));
+                 rate, channels, seconds, static_cast<unsigned long long>(feed.dropped_frames()));
     if (feed.peak() == 0.0f) {
         std::fprintf(stderr,
                      "warning: no signal arrived from %s. On macOS, the terminal app needs "

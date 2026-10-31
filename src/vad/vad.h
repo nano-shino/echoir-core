@@ -45,7 +45,6 @@ protected:
 // use picks the streaming or offline settings (see VadUse).
 // Throws std::invalid_argument if n_threads < 1.
 std::unique_ptr<IVad> make_vad(const std::filesystem::path& model, int n_threads = 2,
-                               const VadOverrides& overrides = {},
-                               VadUse use = VadUse::offline);
+                               const VadOverrides& overrides = {}, VadUse use = VadUse::offline);
 
 }  // namespace echoir::vad

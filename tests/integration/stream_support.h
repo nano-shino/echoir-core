@@ -86,9 +86,9 @@ inline SessionConfig stream_config() {
 
 // Pushes the whole input through a session, the way the CLI does, and returns every event.
 // on_chunk, when set, runs after each chunk with the audio position in ms.
-inline std::vector<SessionEvent> stream_all(IAsrBackend& asr, vad::IVad& vad,
-                                            const audio::PcmBuffer& wav,
-                                            const std::function<void(std::int64_t)>& on_chunk = {}) {
+inline std::vector<SessionEvent> stream_all(
+    IAsrBackend& asr, vad::IVad& vad, const audio::PcmBuffer& wav,
+    const std::function<void(std::int64_t)>& on_chunk = {}) {
     std::vector<SessionEvent> events;
     Session session(asr, vad, stream_config(),
                     [&events](const SessionEvent& ev) { events.push_back(ev); });

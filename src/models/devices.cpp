@@ -13,7 +13,8 @@ namespace {
 
 constexpr std::int64_t kMiB = 1024 * 1024;
 
-// Some backends pass a fixed-width hardware string through, such as the CPU brand padded with spaces.
+// Some backends pass a fixed-width hardware string through, such as the CPU brand padded with
+// spaces.
 std::string trimmed(const char* text) {
     const std::string value = text == nullptr ? std::string() : std::string(text);
     const std::size_t first = value.find_first_not_of(" \t");

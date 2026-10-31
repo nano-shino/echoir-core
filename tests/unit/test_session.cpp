@@ -348,7 +348,8 @@ TEST_CASE("session: the segment after a forced cut drops the words that repeat t
     rig.session().process();  // the remainder is ongoing
     rig.session().flush();
 
-    CHECK(texts_of(rig.events, ECHOIR_EVENT_PARTIAL) == std::vector<std::string>{"spent the night."});
+    CHECK(texts_of(rig.events, ECHOIR_EVENT_PARTIAL) ==
+          std::vector<std::string>{"spent the night."});
     CHECK(texts_of(rig.events, ECHOIR_EVENT_FINAL) ==
           std::vector<std::string>{"[0,8000)", "We drove down the road, we.", "spent the night."});
     // The segment that starts at the cut is decoded without history.
