@@ -16,12 +16,11 @@
 #include <vector>
 
 #include "audio/fbank.h"
-#include "backends/backend_log.h"
+#include "backends/backend_loader.h"
 #include "backends/ggml_header.h"
 #include "errors.h"
 #include "ggml-alloc.h"
 #include "ggml-backend.h"
-#include "ggml-cpu.h"
 #include "ggml.h"
 #include "gguf.h"
 
@@ -325,7 +324,7 @@ FireRedModel::FireRedModel(const std::filesystem::path& model, int n_threads)
     if (!backends::is_regular_model_file(model)) {
         throw ModelLoadError("FireRedVAD model not found: " + model.string());
     }
-    backends::configure_backend_logs();
+    backends::load_backends();
     const std::string path = model.string();
     Impl& impl = *impl_;
 
@@ -363,14 +362,22 @@ FireRedModel::FireRedModel(const std::filesystem::path& model, int n_threads)
     }
     check_data_fits(g, static_cast<std::uint64_t>(file_size), path);
 
-    impl.backend.reset(ggml_backend_cpu_init());
+    // Through the device registry, not ggml_backend_cpu_init: in a GGML_BACKEND_DL build the CPU
+    // backend is a module loaded at run time, and its functions are not linked.
+    ggml_backend_dev_t cpu = ggml_backend_dev_by_type(GGML_BACKEND_DEVICE_TYPE_CPU);
+    impl.backend.reset(cpu != nullptr ? ggml_backend_dev_init(cpu, nullptr) : nullptr);
     if (!impl.backend) {
         throw std::runtime_error("FireRedModel: cannot start the CPU backend");
     }
     // ggml's workers spin on barriers, so more threads than cores make every step slower.
     const unsigned cores = std::thread::hardware_concurrency();
-    ggml_backend_cpu_set_n_threads(
-        impl.backend.get(), cores > 0 ? std::min(n_threads, static_cast<int>(cores)) : n_threads);
+    auto set_n_threads = reinterpret_cast<ggml_backend_set_n_threads_t>(
+        ggml_backend_reg_get_proc_address(ggml_backend_dev_backend_reg(cpu),
+                                          "ggml_backend_set_n_threads"));
+    if (set_n_threads != nullptr) {
+        set_n_threads(impl.backend.get(),
+                      cores > 0 ? std::min(n_threads, static_cast<int>(cores)) : n_threads);
+    }
 
     // The filters are copied transposed, so they get a context and a buffer of their own.
     ggml_init_params tparams{};

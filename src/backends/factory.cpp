@@ -3,7 +3,7 @@
 #include <stdexcept>
 
 #include "backends/asr_backend.h"
-#include "backends/backend_log.h"
+#include "backends/backend_loader.h"
 #include "backends/whisper_backend.h"
 #include "errors.h"
 #ifdef ECHOIR_FAKE_BACKEND
@@ -34,7 +34,7 @@ std::unique_ptr<IAsrBackend> make_backend(const echoir_engine_params& params) {
         throw std::invalid_argument("n_threads must not be negative");
     }
     const int n_threads = params.n_threads == 0 ? kDefaultThreads : params.n_threads;
-    backends::configure_backend_logs();
+    backends::load_backends();
 
     switch (params.backend) {
         case ECHOIR_BACKEND_WHISPER:

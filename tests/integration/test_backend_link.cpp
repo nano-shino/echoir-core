@@ -3,6 +3,7 @@
 // second copy of ggml shows up here, before any decode runs.
 #include <cstring>
 
+#include "backends/backend_loader.h"
 #include "doctest.h"
 #include "whisper.h"
 
@@ -12,6 +13,8 @@
 #endif
 
 TEST_CASE("backend libraries link and report their build info") {
+    // A GGML_BACKEND_DL build has no backend, so no system info, until the modules are loaded.
+    echoir::backends::load_backends();
     CHECK(std::strlen(whisper_print_system_info()) > 0);
 #ifdef ECHOIR_HAS_QWEN
     CHECK(std::strlen(llama_print_system_info()) > 0);
