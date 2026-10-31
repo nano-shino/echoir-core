@@ -14,6 +14,7 @@
 #include <system_error>
 #include <vector>
 
+#include "backends/backend_loader.h"
 #include "backends/ggml_header.h"
 #include "errors.h"
 #include "whisper.h"
@@ -187,6 +188,7 @@ SileroVad::SileroVad(const std::filesystem::path& model, int n_threads,
     loader.eof = &model_eof;
     loader.close = &no_close;
 
+    backends::load_backends();
     whisper_vad_context_params cparams = whisper_vad_default_context_params();
     cparams.n_threads = n_threads;
     cparams.use_gpu = false;  // VAD runs on CPU.

@@ -54,7 +54,10 @@ which CI installs too.
 ## Rules
 
 - No OS API calls and no OS `#ifdef` in `src/`. Platform differences come from miniaudio and ggml,
-  which report what the running system supports, such as `ma_is_loopback_supported`.
+  which report what the running system supports, such as `ma_is_loopback_supported`. The one
+  exception is the module folder lookup in `src/backends/backend_loader.cpp`, which calls `dladdr`
+  in `GGML_BACKEND_DL` builds (Android), because ggml's default search does not find modules inside
+  an app.
 - No new third-party dependency without a discussion in an issue. The current ones are vendored in
   `third_party/single/` with their licenses, plus the whisper.cpp and llama.cpp submodules.
 - Comments and documentation must make sense on their own. Do not refer to internal planning

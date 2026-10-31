@@ -22,7 +22,7 @@ before the first release.
 - A C ABI (`include/echoir/echoir.h`) and a C# binding, `Echoir.Core`.
 - The `echoir` command-line tool: `transcribe`, `bench`, `score`, `devices`, `models`, and `serve`,
   a JSON-lines service for host processes.
-- CPU, Metal (macOS) and Vulkan (Windows, Android) GPU backends.
+- CPU, Metal (macOS, iOS) and Vulkan (Windows) GPU backends. On Android the CPU backend ships in one build per ARM feature set (dotprod, fp16, i8mm, SVE2, SME), and the best one the device runs is loaded.
 
 The context prompt is not in the C ABI yet. The command line and `echoir serve` take one.
 

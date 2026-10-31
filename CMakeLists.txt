@@ -28,7 +28,7 @@ else()
   set(ECHOIR_METAL_DEFAULT OFF)
 endif()
 option(GGML_METAL "ggml Metal backend (Apple GPU)" ${ECHOIR_METAL_DEFAULT})
-option(GGML_VULKAN "ggml Vulkan backend (Windows, Android)" OFF)
+option(GGML_VULKAN "ggml Vulkan backend (Windows)" OFF)
 option(GGML_CUDA "ggml CUDA backend (optional)" OFF)
 
 # --- Language and build settings ------------------------------------------------

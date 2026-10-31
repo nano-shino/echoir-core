@@ -6,6 +6,7 @@
 #include <utility>
 #include <vector>
 
+#include "backends/backend_loader.h"
 #include "ggml-backend.h"
 
 namespace echoir::models {
@@ -27,6 +28,7 @@ std::string trimmed(const char* text) {
 }  // namespace
 
 std::vector<Device> query_devices() {
+    backends::load_backends();
     std::vector<Device> devices;
     for (std::size_t i = 0; i < ggml_backend_dev_count(); ++i) {
         ggml_backend_dev_t dev = ggml_backend_dev_get(i);

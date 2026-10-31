@@ -11,6 +11,7 @@
 #include <string_view>
 #include <vector>
 
+#include "backends/backend_loader.h"
 #include "backends/backend_log.h"
 #include "backends/ggml_header.h"
 #include "errors.h"
@@ -148,7 +149,7 @@ WhisperBackend::WhisperBackend(const std::string& model_path, bool use_gpu, int 
     if (n_threads < 1) {
         throw std::invalid_argument("n_threads must be at least 1");
     }
-    backends::configure_backend_logs();
+    backends::load_backends();
     check_model_header(model_path);
 
     // A GPU that fails to start is not a bad model. Whisper then runs on the CPU but logs an

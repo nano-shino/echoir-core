@@ -12,7 +12,7 @@
 #include <string_view>
 #include <vector>
 
-#include "backends/backend_log.h"
+#include "backends/backend_loader.h"
 #include "errors.h"
 #include "llama.h"
 #include "mtmd-helper.h"
@@ -251,7 +251,7 @@ QwenBackend::QwenBackend(const std::string& model_path, const std::string& mmpro
     if (n_threads < 1) {
         throw std::invalid_argument("n_threads must be at least 1");
     }
-    backends::configure_backend_logs();
+    backends::load_backends();
     init_llama_backend();
 
     // A negative n_gpu_layers offloads every layer.
