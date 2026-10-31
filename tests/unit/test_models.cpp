@@ -178,7 +178,7 @@ TEST_CASE("the catalogue JSON reports presence, default VADs and fit per device"
     // A GPU with 1000 MB free and a larger CPU. The best device is the GPU.
     const std::vector<Device> devices = {
         {"cpu", false, 16000, 8000},
-        {"gpu", true, 8000, 1000},
+        {"gpu", true, 8000, 1000, "Test GPU", false},
     };
     const nlohmann::json doc = nlohmann::json::parse(
         echoir::models::catalogue_json(registry, dir.path(), devices));
@@ -187,6 +187,9 @@ TEST_CASE("the catalogue JSON reports presence, default VADs and fit per device"
     CHECK(doc.at("devices")[0].at("type") == "cpu");
     CHECK(doc.at("devices")[1].at("type") == "gpu");
     CHECK(doc.at("devices")[1].at("memory_free_mb") == 1000);
+    CHECK(doc.at("devices")[1].at("description") == "Test GPU");
+    CHECK(doc.at("devices")[0].at("integrated") == false);
+    CHECK(doc.at("devices")[1].at("integrated") == false);
     CHECK(doc.at("default_vad").at("whisper") == "fake-vad");
 
     const nlohmann::json& asr = doc.at("models")[0];

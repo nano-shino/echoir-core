@@ -12,7 +12,8 @@
 namespace echoir::models {
 
 // The catalogue as JSON text:
-//   {"devices":[{"name","type":"gpu"|"cpu","memory_total_mb","memory_free_mb"}],
+//   {"devices":[{"name","type":"gpu"|"cpu","description","integrated","memory_total_mb",
+//                "memory_free_mb"}],
 //    "default_vad":{"whisper":id,"qwen":id},
 //    "models":[{<entry>,"files":[{<file>,"present":bool}],"present":bool,"fits":bool}]}
 // A file is present when it is in dir and has the size the catalogue gives. A model fits when its

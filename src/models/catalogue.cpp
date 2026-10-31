@@ -42,6 +42,8 @@ std::string catalogue_json(const Registry& registry, const std::filesystem::path
     for (const Device& device : devices) {
         device_list.push_back({{"name", device.name},
                                {"type", device.gpu ? "gpu" : "cpu"},
+                               {"description", device.description},
+                               {"integrated", device.integrated},
                                {"memory_total_mb", device.total_mb},
                                {"memory_free_mb", device.free_mb}});
     }

@@ -331,9 +331,12 @@ ECHOIR_API void           echoir_model_params_init(echoir_model_params*);
 ECHOIR_API echoir_engine* echoir_engine_create_from_model(const echoir_model_params*);
 
 // The catalogue and the machine as JSON, UTF-8:
-//   {"devices":[{"name","type":"gpu"|"cpu","memory_total_mb","memory_free_mb"}],
+//   {"devices":[{"name","type":"gpu"|"cpu","description","integrated","memory_total_mb",
+//                "memory_free_mb"}],
 //    "default_vad":{"whisper":id,"qwen":id},
 //    "models":[{<entry>,"files":[{<file>,"present":bool}],"present":bool,"fits":bool}]}
+// A device name is ggml's device id and description its human-readable name, which may be empty.
+// integrated marks a GPU that shares system memory, so its memory size says little about speed.
 // registry_json NULL = built-in catalogue. models_dir NULL or "" = no file is present. A file is
 // present when it is in models_dir and has the size the catalogue gives. fits: min_vram_mb is at
 // most the free memory of the best device: the GPU with the most free memory, else the CPU. An
