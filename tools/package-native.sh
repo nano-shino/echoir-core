@@ -112,6 +112,8 @@ EOF
     [[ -f "$bin/libechoir.so" ]] || { echo "$bin/libechoir.so is missing. Build the preset first." >&2; exit 1; }
     [[ -f "$bin/libomp.so" ]] || { echo "$bin/libomp.so is missing; the Android build copies it from the NDK." >&2; exit 1; }
     : "${ANDROID_NDK_HOME:?ANDROID_NDK_HOME is not set}"
+    # The NDK ships one prebuilt toolchain folder, and the first match is the one used.
+    # shellcheck disable=SC2012
     readelf="$(ls "$ANDROID_NDK_HOME"/toolchains/llvm/prebuilt/*/bin/llvm-readelf | head -n 1)"
     llvm_strip="$(dirname "$readelf")/llvm-strip"
     name="echoir-$version-$label"

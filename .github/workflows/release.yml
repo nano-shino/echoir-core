@@ -121,6 +121,8 @@ jobs:
       - name: Smoke test from the archive
         run: |
           mkdir -p "$RUNNER_TEMP/smoke" && tar -C "$RUNNER_TEMP/smoke" -xzf dist/*.tar.gz
+          # The archive holds one folder, so the glob names its echoir.
+          # shellcheck disable=SC2211
           "$RUNNER_TEMP"/smoke/*/echoir --help
           otool -L "$RUNNER_TEMP"/smoke/*/libechoir.dylib
       - uses: actions/upload-artifact@v4
@@ -140,7 +142,10 @@ jobs:
       - run: sudo apt-get update && sudo apt-get install -y ninja-build
       # OpenMP off: ggml's own thread pool, so the archive does not depend on libgomp.
       - name: Configure
-        run: cmake --preset linux-cpu -DBUILD_TESTING=OFF -DGGML_OPENMP=OFF $X64_FLAGS
+        run: |
+          # $X64_FLAGS is a list of flags, and it must split into words.
+          # shellcheck disable=SC2086
+          cmake --preset linux-cpu -DBUILD_TESTING=OFF -DGGML_OPENMP=OFF $X64_FLAGS
       - name: Build
         run: cmake --build --preset linux-cpu
       - name: Package
@@ -148,6 +153,8 @@ jobs:
       - name: Smoke test from the archive
         run: |
           mkdir -p "$RUNNER_TEMP/smoke" && tar -C "$RUNNER_TEMP/smoke" -xzf dist/*.tar.gz
+          # The archive holds one folder, so the glob names its echoir.
+          # shellcheck disable=SC2211
           "$RUNNER_TEMP"/smoke/*/echoir --help
           ldd "$RUNNER_TEMP"/smoke/*/libechoir.so
       - uses: actions/upload-artifact@v4
@@ -268,7 +275,10 @@ jobs:
           path: dist
           merge-multiple: true
       - name: Checksums
-        run: cd dist && sha256sum * > SHA256SUMS && cat SHA256SUMS
+        run: |
+          # No archive name starts with a dash, so the glob cannot become an option.
+          # shellcheck disable=SC2035
+          cd dist && sha256sum * > SHA256SUMS && cat SHA256SUMS
       - name: Create the release
         env:
           GH_TOKEN: ${{ github.token }}
