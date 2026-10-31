@@ -28,7 +28,7 @@ jobs:
 
       # Each KEY=VALUE line of the file becomes an environment variable for the later steps.
       - name: Read the tool versions
-        run: grep -E '^[A-Z_]+=' tools/lint-versions.env >> "$GITHUB_ENV"
+        run: grep -E '^[A-Z0-9_]+=' tools/lint-versions.env >> "$GITHUB_ENV"
 
       - name: Install clang-format and ruff
         run: |
