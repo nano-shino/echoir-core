@@ -63,7 +63,11 @@ public sealed class ModelCatalogue
                 Name: device.GetProperty("name").GetString() ?? string.Empty,
                 IsGpu: device.GetProperty("type").GetString() == "gpu",
                 MemoryTotalMb: device.GetProperty("memory_total_mb").GetInt64(),
-                MemoryFreeMb: device.GetProperty("memory_free_mb").GetInt64()));
+                MemoryFreeMb: device.GetProperty("memory_free_mb").GetInt64(),
+                Description: device.TryGetProperty("description", out JsonElement description) && description.ValueKind == JsonValueKind.String
+                    ? description.GetString() ?? string.Empty
+                    : string.Empty,
+                IsIntegrated: device.TryGetProperty("integrated", out JsonElement integrated) && integrated.ValueKind == JsonValueKind.True));
         }
 
         var defaultVad = new Dictionary<string, string>();
@@ -115,8 +119,16 @@ public sealed class ModelCatalogue
     }
 }
 
-// A compute device that ggml reports.
-public sealed record DeviceInfo(string Name, bool IsGpu, long MemoryTotalMb, long MemoryFreeMb);
+// A compute device that ggml reports. Name is ggml's device id and Description its human-readable
+// name. IsIntegrated marks a GPU that shares system memory, so its memory size says little about
+// speed. The last two are optional, and default when the native library is older.
+public sealed record DeviceInfo(
+    string Name,
+    bool IsGpu,
+    long MemoryTotalMb,
+    long MemoryFreeMb,
+    string Description = "",
+    bool IsIntegrated = false);
 
 // A catalogue entry. Present is true when every file is in the models directory with its size.
 // Fits is advisory: the core compares MinVramMb with the best device's free memory.

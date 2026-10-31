@@ -246,6 +246,8 @@ TEST_CASE("models json parses and lists devices, default VADs and the catalogue"
     for (const nlohmann::json& device : doc.at("devices")) {
         CHECK(device.at("type").is_string());
         CHECK(device.at("memory_free_mb").is_number_integer());
+        CHECK(device.at("description").is_string());
+        CHECK(device.at("integrated").is_boolean());
     }
     CHECK(doc.at("default_vad").at("whisper") == "silero-v6.2.0");
 
