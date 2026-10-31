@@ -39,8 +39,8 @@ tools/lint.sh          # the linters on every file, the formatters on the files 
 tools/lint.sh --all    # the formatters on every file too; some older files do not pass yet
 ```
 
-The script needs clang-format 23.1.3, ruff 0.17.3, shellcheck 0.11.0 and actionlint 1.7.12, the
-versions CI uses (`.github/workflows/lint.yml`).
+The script refuses to run unless the tools are the versions pinned in `tools/lint-versions.env`,
+which CI installs too.
 
 ## Style
 

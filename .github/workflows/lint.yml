@@ -1,7 +1,6 @@
 # Lint and format checks, run by tools/lint.sh. Every file gets the linters: shellcheck, actionlint
 # and ruff check. The formatters, clang-format and ruff format, check the files a change touches,
-# because some files predate the rules. Tool versions are pinned here and in tools/lint.sh; change
-# them together.
+# because some files predate the rules. The tool versions are in tools/lint-versions.env.
 name: lint
 
 on:
@@ -27,34 +26,32 @@ jobs:
         with:
           fetch-depth: 0
 
+      # Each KEY=VALUE line of the file becomes an environment variable for the later steps.
+      - name: Read the tool versions
+        run: grep -E '^[A-Z_]+=' tools/lint-versions.env >> "$GITHUB_ENV"
+
       - name: Install clang-format and ruff
         run: |
           python3 -m venv "$RUNNER_TEMP/lint-venv"
-          "$RUNNER_TEMP/lint-venv/bin/pip" install clang-format==23.1.3 ruff==0.17.3
+          "$RUNNER_TEMP/lint-venv/bin/pip" install \
+            "clang-format==$CLANG_FORMAT_VERSION" "ruff==$RUFF_VERSION"
           echo "$RUNNER_TEMP/lint-venv/bin" >> "$GITHUB_PATH"
 
       # The archives are checked against their SHA-256 before they are unpacked.
       - name: Install shellcheck and actionlint
-        env:
-          SHELLCHECK_SHA256: 8c3be12b05d5c177a04c29e3c78ce89ac86f1595681cab149b65b97c4e227198
-          ACTIONLINT_SHA256: 8aca8db96f1b94770f1b0d72b6dddcb1ebb8123cb3712530b08cc387b349a3d8
         run: |
           mkdir -p "$RUNNER_TEMP/bin" "$RUNNER_TEMP/download"
           cd "$RUNNER_TEMP/download"
-          curl -fsSLO https://github.com/koalaman/shellcheck/releases/download/v0.11.0/shellcheck-v0.11.0.linux.x86_64.tar.xz
-          echo "$SHELLCHECK_SHA256  shellcheck-v0.11.0.linux.x86_64.tar.xz" | sha256sum -c -
-          tar -xJf shellcheck-v0.11.0.linux.x86_64.tar.xz -C "$RUNNER_TEMP/bin" --strip-components=1 shellcheck-v0.11.0/shellcheck
-          curl -fsSLO https://github.com/rhysd/actionlint/releases/download/v1.7.12/actionlint_1.7.12_linux_amd64.tar.gz
-          echo "$ACTIONLINT_SHA256  actionlint_1.7.12_linux_amd64.tar.gz" | sha256sum -c -
-          tar -xzf actionlint_1.7.12_linux_amd64.tar.gz -C "$RUNNER_TEMP/bin" actionlint
+          shellcheck="shellcheck-v$SHELLCHECK_VERSION.linux.x86_64.tar.xz"
+          curl -fsSLO "https://github.com/koalaman/shellcheck/releases/download/v$SHELLCHECK_VERSION/$shellcheck"
+          echo "$SHELLCHECK_SHA256  $shellcheck" | sha256sum -c -
+          tar -xJf "$shellcheck" -C "$RUNNER_TEMP/bin" --strip-components=1 \
+            "shellcheck-v$SHELLCHECK_VERSION/shellcheck"
+          actionlint="actionlint_${ACTIONLINT_VERSION}_linux_amd64.tar.gz"
+          curl -fsSLO "https://github.com/rhysd/actionlint/releases/download/v$ACTIONLINT_VERSION/$actionlint"
+          echo "$ACTIONLINT_SHA256  $actionlint" | sha256sum -c -
+          tar -xzf "$actionlint" -C "$RUNNER_TEMP/bin" actionlint
           echo "$RUNNER_TEMP/bin" >> "$GITHUB_PATH"
-
-      - name: Versions
-        run: |
-          clang-format --version
-          ruff --version
-          shellcheck --version | sed -n 2p
-          actionlint -version | head -1
 
       - name: Lint
         run: tools/lint.sh origin/main

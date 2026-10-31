@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
-# Lint and format checks. CI runs this from .github/workflows/lint.yml, with the tool versions
-# pinned there. Install the same versions to get the same results: clang-format 23.1.3,
-# ruff 0.17.3, shellcheck 0.11.0 and actionlint 1.7.12.
+# Lint and format checks. CI runs this from .github/workflows/lint.yml. The tool versions are in
+# tools/lint-versions.env, and this script refuses to run with other versions.
 #
 #   tools/lint.sh [--all] [base]
 #
@@ -13,6 +12,8 @@ set -euo pipefail
 
 root="$(cd "$(dirname "$0")/.." && pwd)"
 cd "$root"
+# shellcheck source=tools/lint-versions.env
+. tools/lint-versions.env
 
 all=0
 if [[ "${1:-}" == --all ]]; then
@@ -21,9 +22,23 @@ if [[ "${1:-}" == --all ]]; then
 fi
 base="${1:-origin/main}"
 
-for tool in clang-format ruff shellcheck actionlint; do
+# require tool version command...: the tool must be installed, and its version output must
+# contain the pinned version.
+require() {
+  local tool="$1" want="$2" have
+  shift 2
   command -v "$tool" >/dev/null || { echo "lint.sh: $tool is not installed" >&2; exit 2; }
-done
+  have="$("$@" 2>&1 || true)"
+  if [[ "$have" != *"$want"* ]]; then
+    echo "lint.sh: $tool $want is pinned; found: $(head -n 1 <<< "$have")" >&2
+    exit 2
+  fi
+}
+
+require clang-format "$CLANG_FORMAT_VERSION" clang-format --version
+require ruff "$RUFF_VERSION" ruff --version
+require shellcheck "$SHELLCHECK_VERSION" shellcheck --version
+require actionlint "$ACTIONLINT_VERSION" actionlint -version
 
 status=0
 
@@ -31,7 +46,10 @@ if (( all )); then
   changed="$(git ls-files)"
 else
   merge_base="$(git merge-base "$base" HEAD)"
-  changed="$(git diff --name-only --diff-filter=ACMR "$merge_base"; git ls-files --others --exclude-standard)"
+  changed="$(
+    git diff --name-only --diff-filter=ACMR "$merge_base"
+    git ls-files --others --exclude-standard
+  )"
 fi
 
 # Vendored code under third_party/ is copied verbatim and is not formatted.
@@ -39,7 +57,7 @@ cxx="$(printf '%s\n' "$changed" | grep -E '\.(c|cc|cpp|h|hpp)$' | grep -v '^thir
 py="$(printf '%s\n' "$changed" | grep -E '\.py$' || true)"
 
 echo "== shellcheck"
-git ls-files '*.sh' | xargs shellcheck || status=1
+git ls-files '*.sh' | xargs shellcheck -x || status=1
 
 echo "== actionlint"
 actionlint || status=1
