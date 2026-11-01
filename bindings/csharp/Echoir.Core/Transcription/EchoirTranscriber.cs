@@ -45,11 +45,80 @@ public sealed class EchoirTranscriber : IDisposable, IAsyncDisposable
     private SynchronizationContext? _context;
     private bool _disposed;
 
+    // The lag and speed of the current or last run. Written under _native, and read under
+    // _speedGate alone, so the UI never waits on a session call.
+    private readonly object _speedGate = new();
+    private readonly List<double> _speechRtfs = new();
+    private LagMonitor? _lagMonitor;
+    private TranscriberStats? _lastStats;
+    private string _backend = string.Empty;
+    private double _speechMs;
+    private long _runStartedMs;
+    private long _runEndedMs;
+
     // The text of the session. Read it on the context the changes are raised on.
     public Transcript Transcript => _transcript;
 
     // Raised for an error of the session, such as a lost device.
     public event EventHandler<TranscriberErrorEventArgs>? Error;
+
+    // Raised for each STATS event of the core: every 10 decoding ticks, on the same context as the
+    // transcript changes.
+    public event EventHandler<TranscriberStats>? Stats;
+
+    // How far the decoding is behind the audio, updated about 30 times a second while running.
+    // TranscriberLag.Idle while not running. Never waits for a decode.
+    public TranscriberLag Lag
+    {
+        get
+        {
+            lock (_speedGate)
+            {
+                return _running && _lagMonitor is not null ? _lagMonitor.Current : TranscriberLag.Idle;
+            }
+        }
+    }
+
+    // The latest STATS of the current or last run; null before the first one.
+    public TranscriberStats? LastStats
+    {
+        get
+        {
+            lock (_speedGate)
+            {
+                return _lastStats;
+            }
+        }
+    }
+
+    // How the model did over the current run so far, or over the last run until the next Start.
+    // Null before the first Start.
+    public RunSpeed? RunSpeed
+    {
+        get
+        {
+            lock (_speedGate)
+            {
+                if (_lagMonitor is null)
+                {
+                    return null;
+                }
+                long end = _running ? Environment.TickCount64 : _runEndedMs;
+                double[] rtfs = _speechRtfs.Order().ToArray();
+                return new RunSpeed
+                {
+                    Backend = _backend,
+                    Duration = TimeSpan.FromMilliseconds(Math.Max(0, end - _runStartedMs)),
+                    Speech = TimeSpan.FromMilliseconds(_speechMs),
+                    SpeechRtfMedian = Percentile(rtfs, 0.5),
+                    Samples = rtfs.Length,
+                    TypicalBacklog = _lagMonitor.TypicalBacklog,
+                    MaxBacklog = _lagMonitor.MaxBacklog,
+                    BehindShare = _lagMonitor.BehindShare,
+                };
+            }
+        }
+    }
 
     public bool IsLoaded
     {
@@ -232,7 +301,16 @@ public sealed class EchoirTranscriber : IDisposable, IAsyncDisposable
                 : "echoir_session_start_capture");
 
             _source = source;
-            _running = true;
+            lock (_speedGate)
+            {
+                _lagMonitor = new LagMonitor(options.MinChunkMs);
+                _speechRtfs.Clear();
+                _lastStats = null;
+                _backend = string.Empty;
+                _speechMs = 0;
+                _runStartedMs = Environment.TickCount64;
+                _running = true;
+            }
             _poller = new Poller(this);
             _poller.Start();
         }
@@ -462,7 +540,11 @@ public sealed class EchoirTranscriber : IDisposable, IAsyncDisposable
             NativeMethods.SessionFlush(handle);
         }
         status = NativeMethods.SessionStop(handle);
-        _running = false;
+        lock (_speedGate)
+        {
+            _running = false;
+            _runEndedMs = Environment.TickCount64;
+        }
         _inputMuted = false;
         CollectLocked();
 
@@ -516,11 +598,62 @@ public sealed class EchoirTranscriber : IDisposable, IAsyncDisposable
         {
             if (FromNative(in ev) is Notification notification)
             {
+                if (notification.Stats is { } stats)
+                {
+                    RecordStats(stats);
+                }
                 EnqueueLocked(notification);
                 count++;
             }
         }
         return count;
+    }
+
+    private void RecordStats(TranscriberStats stats)
+    {
+        lock (_speedGate)
+        {
+            _lastStats = stats;
+            if (stats.Backend.Length > 0)
+            {
+                _backend = stats.Backend;
+            }
+            if (stats.SpeechMs > 0)
+            {
+                _speechRtfs.Add(stats.SpeechRtf);
+                _speechMs += (double)stats.SpeechMs * Math.Max(1, stats.Ticks);
+            }
+        }
+    }
+
+    // Lock held. Reads the backlog of the running session into the lag monitor.
+    private unsafe void SampleLagLocked()
+    {
+        if (!_running || _session is null)
+        {
+            return;
+        }
+        LagData lag = default;
+        lag.StructSize = (uint)sizeof(LagData);
+        if (NativeMethods.SessionReadLag(_session.DangerousGetHandle(), &lag) != NativeValues.StatusOk)
+        {
+            return;
+        }
+        lock (_speedGate)
+        {
+            _lagMonitor?.Add(Environment.TickCount64, lag.BacklogMs, lag.TickMs);
+        }
+    }
+
+    // The value at fraction q of sorted values, by nearest rank; 0 for none.
+    private static double Percentile(double[] sorted, double q)
+    {
+        if (sorted.Length == 0)
+        {
+            return 0;
+        }
+        int index = (int)Math.Ceiling(q * sorted.Length) - 1;
+        return sorted[Math.Clamp(index, 0, sorted.Length - 1)];
     }
 
     private void EnqueueLocked(Notification notification)
@@ -610,6 +743,9 @@ public sealed class EchoirTranscriber : IDisposable, IAsyncDisposable
             case NotificationKind.Error:
                 Error?.Invoke(this, new TranscriberErrorEventArgs(notification.Text));
                 break;
+            case NotificationKind.Stats:
+                Stats?.Invoke(this, notification.Stats!);
+                break;
         }
     }
 
@@ -620,6 +756,7 @@ public sealed class EchoirTranscriber : IDisposable, IAsyncDisposable
         lock (_native)
         {
             count = CollectLocked();
+            SampleLagLocked();
         }
         if (count > 0)
         {
@@ -640,8 +777,9 @@ public sealed class EchoirTranscriber : IDisposable, IAsyncDisposable
             case NativeValues.EventError:
                 return new Notification(NotificationKind.Error, 0, 0, 0, Text(ev.Detail));
             case NativeValues.EventStats:
-                // STATS is sent, but this binding does not surface it yet.
-                return null;
+                return TranscriberStats.Parse(Text(ev.Detail)) is { } stats
+                    ? new Notification(NotificationKind.Stats, 0, 0, 0, string.Empty, stats)
+                    : null;
             default:
                 return null;
         }
@@ -752,15 +890,18 @@ public sealed class EchoirTranscriber : IDisposable, IAsyncDisposable
         Final,
         Cleared,
         Error,
+        Stats,
     }
 
-    // One event waiting to be raised. For an error, Text holds the message.
+    // One event waiting to be raised. For an error, Text holds the message; for STATS, Stats holds
+    // the figures.
     private readonly record struct Notification(
         NotificationKind Kind,
         long Id,
         long StartMs,
         long EndMs,
-        string Text);
+        string Text,
+        TranscriberStats? Stats = null);
 
     // The poll thread. It is stopped by a flag, and joined by Dispose.
     private sealed class Poller

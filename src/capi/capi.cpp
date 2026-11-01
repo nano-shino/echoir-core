@@ -4,6 +4,7 @@
 #include <atomic>
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <exception>
 #include <filesystem>
 #include <memory>
@@ -660,6 +661,32 @@ echoir_status echoir_session_set_input_muted(echoir_session* s, int32_t muted) {
         session.set_input_muted(muted != 0);
     });
 }
+
+echoir_status echoir_session_read_lag(echoir_session* s, echoir_lag* out) {
+    const char* fn = "echoir_session_read_lag";
+    if (out == nullptr) {
+        set_last_error(fn, "out must not be NULL");
+        return ECHOIR_ERR_INVALID_ARG;
+    }
+    // The size of the first version of echoir_lag. A host built against it keeps working when the
+    // struct grows; a host built against a later header gets the fields past this version zeroed.
+    constexpr size_t kEndOfTickMs = offsetof(echoir_lag, tick_ms) + sizeof(out->tick_ms);
+    if (out->struct_size < kEndOfTickMs) {
+        set_last_error(fn, "struct_size is smaller than the fields up to tick_ms");
+        return ECHOIR_ERR_INVALID_ARG;
+    }
+    return run_session_call(s, fn, [out](echoir::Session& session) {
+        const echoir::SessionLag lag = session.lag();
+        if (out->struct_size > sizeof(echoir_lag)) {
+            std::memset(reinterpret_cast<unsigned char*>(out) + sizeof(echoir_lag), 0,
+                        out->struct_size - sizeof(echoir_lag));
+        }
+        out->head_ms = lag.head_ms;
+        out->decoded_ms = lag.decoded_ms;
+        out->backlog_ms = lag.backlog_ms;
+        out->tick_ms = lag.tick_ms;
+    });
+}
 #else
 // Without the engine no session can be created, so every session call reports that the backends
 // are missing.
@@ -720,5 +747,9 @@ echoir_status echoir_session_read_peaks(echoir_session*, int64_t, int64_t, int32
 
 echoir_status echoir_session_set_input_muted(echoir_session*, int32_t) {
     return not_built("echoir_session_set_input_muted");
+}
+
+echoir_status echoir_session_read_lag(echoir_session*, echoir_lag*) {
+    return not_built("echoir_session_read_lag");
 }
 #endif

@@ -228,3 +228,52 @@ TEST_CASE("fake session without retain_audio_ms keeps no audio") {
     CHECK(echoir_session_create(engine, &params, nullptr, nullptr) == nullptr);
     echoir_engine_free(engine);
 }
+
+TEST_CASE("fake build: read_lag reports the audio not yet decoded") {
+    echoir_engine* engine = create_engine();
+    REQUIRE(engine != nullptr);
+    echoir_session_params params{};
+    echoir_session_params_init(&params);
+    echoir_session* session = echoir_session_create(engine, &params, nullptr, nullptr);
+    REQUIRE(session != nullptr);
+
+    echoir_lag lag{};
+    CHECK(echoir_session_read_lag(session, &lag) == ECHOIR_ERR_INVALID_ARG);  // struct_size 0
+    lag.struct_size = sizeof(echoir_lag);
+    REQUIRE(echoir_session_read_lag(session, &lag) == ECHOIR_OK);
+    CHECK(lag.head_ms == 0);
+    CHECK(lag.backlog_ms == 0);
+
+    // Not started, so the pushed audio waits.
+    const std::vector<float> pcm = speech(10 * kBlock);
+    REQUIRE(echoir_session_push_f32(session, pcm.data(), pcm.size(), kSampleRate, 1) == ECHOIR_OK);
+    REQUIRE(echoir_session_read_lag(session, &lag) == ECHOIR_OK);
+    CHECK(lag.head_ms == 1000);
+    CHECK(lag.decoded_ms == 0);
+    CHECK(lag.backlog_ms == 1000);
+    CHECK(lag.tick_ms == 0);
+
+    REQUIRE(echoir_session_flush(session) == ECHOIR_OK);
+    REQUIRE(echoir_session_read_lag(session, &lag) == ECHOIR_OK);
+    CHECK(lag.decoded_ms == 1000);
+    CHECK(lag.backlog_ms == 0);
+
+    // A host built against the first version (struct_size up to tick_ms) keeps working, and a host
+    // built against a later, larger struct gets the fields this version does not know zeroed.
+    struct {
+        echoir_lag known;
+        int64_t later;
+    } larger{};
+    larger.known.struct_size = sizeof(larger);
+    larger.later = 7;
+    REQUIRE(echoir_session_read_lag(session, &larger.known) == ECHOIR_OK);
+    CHECK(larger.known.head_ms == 1000);
+    CHECK(larger.later == 0);
+    lag.struct_size = offsetof(echoir_lag, tick_ms) + sizeof(lag.tick_ms);
+    CHECK(echoir_session_read_lag(session, &lag) == ECHOIR_OK);
+    lag.struct_size = offsetof(echoir_lag, tick_ms);
+    CHECK(echoir_session_read_lag(session, &lag) == ECHOIR_ERR_INVALID_ARG);
+
+    echoir_session_free(session);
+    echoir_engine_free(engine);
+}

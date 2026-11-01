@@ -268,6 +268,22 @@ ECHOIR_API echoir_status  echoir_session_read_peaks(echoir_session*, int64_t sta
 // silence. muted 0 resumes. Takes effect from the next audio the session converts.
 ECHOIR_API echoir_status  echoir_session_set_input_muted(echoir_session*, int32_t muted);
 
+// How far the decoding is behind the audio the session took in, in ms on the session timeline.
+// backlog_ms is head_ms - decoded_ms: the audio waiting for a tick plus the new audio of the tick
+// that runs. While a session keeps up it stays near min_chunk_ms plus one decode; when it grows
+// steadily, the decoder is slower than real time. Set struct_size to sizeof(echoir_lag) before the
+// call. A library older than the header fills the fields it knows and zeroes the rest of
+// struct_size; a newer one writes only the fields that fit. Never waits for a decode. Returns
+// ECHOIR_ERR_INVALID_ARG for out NULL or a struct_size that does not reach tick_ms.
+typedef struct {
+  uint32_t struct_size;  // sizeof(echoir_lag), set by the caller
+  int64_t  head_ms;      // audio taken in
+  int64_t  decoded_ms;   // end of the window of the latest tick that finished
+  int64_t  backlog_ms;   // head_ms - decoded_ms
+  int64_t  tick_ms;      // how long the running tick has run; 0 between ticks
+} echoir_lag;
+ECHOIR_API echoir_status  echoir_session_read_lag(echoir_session*, echoir_lag* out);
+
 // Capture. The library opens an audio device and pushes its audio into a session in live mode.
 // The device's samples are read on a library thread, so the host only starts and stops it.
 typedef enum { ECHOIR_SOURCE_MIC = 1, ECHOIR_SOURCE_LOOPBACK = 2 } echoir_source;

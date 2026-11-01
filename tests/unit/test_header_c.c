@@ -58,6 +58,13 @@ int main(void) {
         EXPECT(echoir_session_read_peaks(NULL, 0, 10, 10, NULL, 0, &n) == NULL_SESSION_STATUS);
         EXPECT(echoir_session_set_input_muted(NULL, 1) == NULL_SESSION_STATUS);
     }
+    {
+        echoir_lag lag;
+        memset(&lag, 0, sizeof lag);
+        EXPECT(echoir_session_read_lag(NULL, NULL) == NULL_SESSION_STATUS);
+        lag.struct_size = (uint32_t)sizeof(echoir_lag);
+        EXPECT(echoir_session_read_lag(NULL, &lag) == NULL_SESSION_STATUS);
+    }
 
     /* A session params struct from a newer header is refused, and so is an unknown policy. Both
        are checked before the engine, so they fail here with no engine. */

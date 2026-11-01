@@ -1139,6 +1139,57 @@ TEST_CASE("session: a STATS event follows every N ticks that decode audio") {
     CHECK(stats[1]["window_ms"] == 1500);
     CHECK(stats[1]["rtf"].get<double>() >= 0.0);
     CHECK(stats[1]["decode_ms"].get<std::int64_t>() >= 0);
+    // Each tick took in 1000 ms; the scripted VAD finds no speech in it.
+    CHECK(stats[1]["ticks"] == 3);
+    CHECK(stats[1]["new_ms"] == 1000);
+    CHECK(stats[1]["speech_ms"] == 0);
+    CHECK(stats[1]["load"].get<double>() >= 0.0);
+    CHECK(stats[1]["speech_rtf"].get<double>() == 0.0);
+}
+
+TEST_CASE("session: STATS counts the speech ranges a tick decodes") {
+    SessionConfig config;
+    config.stats_every_ticks = 1;
+    Rig rig(config);
+    rig.vad.speech = {{0, 8000}};  // 500 ms of speech, ended well before the window end
+    rig.push_ms(1000);
+    rig.session().process();
+    REQUIRE(!rig.events.empty());
+    REQUIRE(rig.events.back().type == ECHOIR_EVENT_STATS);
+    const nlohmann::json stats = nlohmann::json::parse(rig.events.back().detail);
+    CHECK(stats["speech_ms"] == 500);
+    CHECK(stats["new_ms"] == 1000);
+}
+
+TEST_CASE("session: lag counts the audio taken in and not yet decoded") {
+    Rig rig;
+    CHECK(rig.session().lag().backlog_ms == 0);
+    rig.push_ms(1000);
+    echoir::SessionLag lag = rig.session().lag();
+    CHECK(lag.head_ms == 1000);
+    CHECK(lag.decoded_ms == 0);
+    CHECK(lag.backlog_ms == 1000);
+    CHECK(lag.tick_ms == 0);
+
+    rig.session().process();
+    lag = rig.session().lag();
+    CHECK(lag.decoded_ms == 1000);
+    CHECK(lag.backlog_ms == 0);
+
+    rig.push_ms(300);  // below min_chunk_ms, so it waits
+    rig.session().process();
+    lag = rig.session().lag();
+    CHECK(lag.head_ms == 1300);
+    CHECK(lag.backlog_ms == 300);
+
+    rig.session().flush();
+    CHECK(rig.session().lag().backlog_ms == 0);
+
+    rig.push_ms(700);
+    rig.session().reset();
+    lag = rig.session().lag();
+    CHECK(lag.head_ms == 0);
+    CHECK(lag.backlog_ms == 0);
 }
 
 TEST_CASE("session: a STATS event is sent after the events of its tick") {

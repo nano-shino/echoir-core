@@ -70,7 +70,9 @@
 // shown, so the host replaces the PARTIAL. An empty FINAL is sent only to retract a shown PARTIAL.
 // Stats. With stats_every_ticks set, a STATS event follows the events of every N-th tick that
 // decodes audio. It covers the N ticks: the decode time over the window audio (rtf), and the mean
-// decode time and window length per tick.
+// decode time and window length per tick, the rtf of the ticks that decoded speech, and the load:
+// the decode time over the new audio the ticks took in. Once ticks run back to back the load stays
+// near 1 whether or not the session keeps up; lag() tells, by how much audio waits, at any time.
 //
 // Stabilizing the ongoing text, agreement policy (text::Stabilizer). Each decode of the ongoing
 // segment goes into its history, and the text shown is built in three steps:
@@ -147,6 +149,14 @@ SessionEvent make_event(echoir_event_type type, std::int64_t id, std::int64_t st
 // The session whose sink is running on this thread, or null. A session call made from a sink is
 // refused before it can wait on a lock that the sink's own call still holds.
 thread_local const void* t_sink_owner = nullptr;
+
+// The steady clock in nanoseconds, for the running-tick mark of lag(). Never 0 in practice, which
+// the mark uses for "no tick".
+std::int64_t steady_now_ns() noexcept {
+    return std::chrono::duration_cast<std::chrono::nanoseconds>(
+               std::chrono::steady_clock::now().time_since_epoch())
+        .count();
+}
 
 // Marks the calling thread as inside the sink of one session, for the length of a sink call.
 class SinkScope {
@@ -456,6 +466,14 @@ bool Session::run_tick(bool finish, bool drop_on_failure) {
     if (window.empty()) {
         return false;
     }
+    // The timeline end of the window, which is decoded once this tick commits.
+    const std::int64_t window_end = origin_samples_ + static_cast<std::int64_t>(window.size());
+    // lag() reports the running tick. The mark is cleared however the tick ends.
+    struct TickMark {
+        std::atomic<std::int64_t>& started;
+        ~TickMark() { started.store(0); }
+    } tick_mark{tick_started_ns_};
+    tick_started_ns_.store(steady_now_ns());
 
     State next = state_;
     // clear() runs without the decode lock, so it cannot drop the continuation or the seam itself.
@@ -471,6 +489,7 @@ bool Session::run_tick(bool finish, bool drop_on_failure) {
     std::int64_t origin = origin_samples_;
     std::vector<float> carry;
     std::size_t cut = 0;
+    std::int64_t speech_samples = 0;
     // The error is reported first. In live mode the window is then given up, so the next tick
     // starts from new audio and cannot fail on the same range again.
     const auto fail = [&](const std::string& message) {
@@ -482,7 +501,7 @@ bool Session::run_tick(bool finish, bool drop_on_failure) {
     const auto decode_started = std::chrono::steady_clock::now();
     try {
         while (true) {
-            cut = analyze(current, finish, origin, next, events);
+            cut = analyze(current, finish, origin, next, events, speech_samples);
             if (!finish || cut >= current.size()) {
                 break;
             }
@@ -509,7 +528,9 @@ bool Session::run_tick(bool finish, bool drop_on_failure) {
     if (config_.stats_every_ticks > 0) {
         const std::chrono::duration<double, std::milli> decode_time =
             std::chrono::steady_clock::now() - decode_started;
-        stats_.add(decode_time.count(), window_ms);
+        stats_.add(decode_time.count(), window_ms,
+                   static_cast<double>(taken) / stream::kSamplesPerMs,
+                   static_cast<double>(speech_samples) / stream::kSamplesPerMs);
         if (stats_.ticks() >= static_cast<std::size_t>(config_.stats_every_ticks)) {
             SessionEvent ev;
             ev.type = ECHOIR_EVENT_STATS;
@@ -525,6 +546,7 @@ bool Session::run_tick(bool finish, bool drop_on_failure) {
     state_ = std::move(next);
     origin_samples_ = origin + static_cast<std::int64_t>(cut);
     carry_ = std::move(carry);
+    decoded_samples_.store(window_end);
     {
         std::lock_guard<std::mutex> audio(audio_mu_);
         pending_.erase(pending_.begin(), pending_.begin() + static_cast<std::ptrdiff_t>(taken));
@@ -534,7 +556,8 @@ bool Session::run_tick(bool finish, bool drop_on_failure) {
 }
 
 std::size_t Session::analyze(const std::vector<float>& window, bool finish, std::int64_t origin,
-                             State& st, std::vector<SessionEvent>& events) {
+                             State& st, std::vector<SessionEvent>& events,
+                             std::int64_t& speech_samples) {
     const auto len = static_cast<std::int64_t>(window.size());
     const std::vector<vad::Range> ranges = vad_.detect(window);
     const bool rollback = config_.policy == StreamPolicy::rollback;
@@ -591,6 +614,7 @@ std::size_t Session::analyze(const std::vector<float>& window, bool finish, std:
             request.prefix = st.continuation;
             request.rollback_tokens = config_.rollback_tokens;
         }
+        speech_samples += end - start;
         DecodeResult decoded = backend_.decode(request);
         std::u32string raw = utf8_to_utf32(decoded.text);
         std::u32string clean = text::clean_segment(raw);
@@ -751,6 +775,7 @@ void Session::abandon_window(std::size_t taken, std::uint64_t generation) noexce
         }
         // The window is carry_ followed by the taken audio. The next window starts after it.
         origin_samples_ += static_cast<std::int64_t>(carry_.size() + taken);
+        decoded_samples_.store(origin_samples_);
         carry_.clear();
         state_.close_open();
         state_.drop_seam();
@@ -760,6 +785,22 @@ void Session::abandon_window(std::size_t taken, std::uint64_t generation) noexce
         // changes, the window stays, and the next push decodes it again. The ERROR event has
         // already been sent either way.
     }
+}
+
+SessionLag Session::lag() const noexcept {
+    SessionLag out;
+    // decoded is read first: it only grows towards head, so a head read after it is never behind
+    // it, except across a reset, which the clamp covers.
+    const std::int64_t decoded = decoded_samples_.load();
+    const std::int64_t head = head_samples_.load();
+    out.head_ms = head / stream::kSamplesPerMs;
+    out.decoded_ms = std::min(decoded, head) / stream::kSamplesPerMs;
+    out.backlog_ms = out.head_ms - out.decoded_ms;
+    const std::int64_t started = tick_started_ns_.load();
+    if (started != 0) {
+        out.tick_ms = std::max<std::int64_t>(0, (steady_now_ns() - started) / 1000000);
+    }
+    return out;
 }
 
 void Session::drain_resampler() {
@@ -778,6 +819,7 @@ void Session::take_in(std::size_t from) {
         std::fill(begin, pending_.end(), 0.0f);
     }
     store_.append(std::span<const float>(pending_).subspan(from));
+    head_samples_.fetch_add(static_cast<std::int64_t>(pending_.size() - from));
 }
 
 void Session::drop_state() {
@@ -786,6 +828,8 @@ void Session::drop_state() {
         pending_.clear();
         // The timeline restarts at 0, so the kept audio restarts with it.
         store_.clear();
+        head_samples_.store(0);
+        decoded_samples_.store(0);
     }
     const std::int64_t next_id = state_.next_id;
     state_ = State{};

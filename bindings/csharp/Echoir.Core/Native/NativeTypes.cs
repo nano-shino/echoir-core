@@ -40,6 +40,16 @@ internal struct EventData
     public nint Detail;
 }
 
+[StructLayout(LayoutKind.Sequential)]
+internal struct LagData
+{
+    public uint StructSize;
+    public long HeadMs;
+    public long DecodedMs;
+    public long BacklogMs;
+    public long TickMs;
+}
+
 // Values of echoir_status, echoir_event_type and echoir_source.
 internal static class NativeValues
 {
