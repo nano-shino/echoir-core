@@ -178,12 +178,17 @@ Times are milliseconds from the start of the session, or from the last `reset`. 
 1 in a session and never repeat, so a `partial` and its `final` share an id.
 
 **`stats`** reports the speed of the decoding. It is sent after every 10 ticks that decode audio,
-and it covers those ticks. `rtf` is their decode time over their audio time. `decode_ms` and
+and it covers those ticks (`ticks`). `rtf` is their decode time over their audio time. `decode_ms` and
 `window_ms` are the mean decode time and the mean length of the audio decoded per tick, in ms.
-`backend` is `whisper` or `qwen3-asr`. A stats event has no `id`, `start_ms`, `end_ms` or `text`:
+`new_ms` is the mean length of the audio a tick took in (the window minus the audio carried from
+the tick before), `speech_ms` the mean length of the speech it decoded, and `decode_max_ms` the
+slowest tick. `load` is the decode time over the new audio: the share of real time the decoder is
+busy, so at 1 or more the session falls behind. `speech_load` is the same over the ticks that
+decoded speech only, and 0 when none did. `backend` is `whisper` or `qwen3-asr`. A stats event has no `id`,
+`start_ms`, `end_ms` or `text`:
 
 ```json
-{"type":"stats","rtf":0.12,"decode_ms":180,"window_ms":2600,"backend":"qwen3-asr"}
+{"type":"stats","rtf":0.12,"decode_ms":180,"window_ms":2600,"ticks":10,"new_ms":1000,"speech_ms":800,"decode_max_ms":400,"load":0.18,"speech_load":0.2,"backend":"qwen3-asr"}
 ```
 
 ## Replies

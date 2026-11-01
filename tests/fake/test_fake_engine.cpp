@@ -228,3 +228,36 @@ TEST_CASE("fake session without retain_audio_ms keeps no audio") {
     CHECK(echoir_session_create(engine, &params, nullptr, nullptr) == nullptr);
     echoir_engine_free(engine);
 }
+
+TEST_CASE("fake build: read_lag reports the audio not yet decoded") {
+    echoir_engine* engine = create_engine();
+    REQUIRE(engine != nullptr);
+    echoir_session_params params{};
+    echoir_session_params_init(&params);
+    echoir_session* session = echoir_session_create(engine, &params, nullptr, nullptr);
+    REQUIRE(session != nullptr);
+
+    echoir_lag lag{};
+    CHECK(echoir_session_read_lag(session, &lag) == ECHOIR_ERR_INVALID_ARG);  // struct_size 0
+    lag.struct_size = sizeof(echoir_lag);
+    REQUIRE(echoir_session_read_lag(session, &lag) == ECHOIR_OK);
+    CHECK(lag.head_ms == 0);
+    CHECK(lag.backlog_ms == 0);
+
+    // Not started, so the pushed audio waits.
+    const std::vector<float> pcm = speech(10 * kBlock);
+    REQUIRE(echoir_session_push_f32(session, pcm.data(), pcm.size(), kSampleRate, 1) == ECHOIR_OK);
+    REQUIRE(echoir_session_read_lag(session, &lag) == ECHOIR_OK);
+    CHECK(lag.head_ms == 1000);
+    CHECK(lag.decoded_ms == 0);
+    CHECK(lag.backlog_ms == 1000);
+    CHECK(lag.tick_ms == 0);
+
+    REQUIRE(echoir_session_flush(session) == ECHOIR_OK);
+    REQUIRE(echoir_session_read_lag(session, &lag) == ECHOIR_OK);
+    CHECK(lag.decoded_ms == 1000);
+    CHECK(lag.backlog_ms == 0);
+
+    echoir_session_free(session);
+    echoir_engine_free(engine);
+}

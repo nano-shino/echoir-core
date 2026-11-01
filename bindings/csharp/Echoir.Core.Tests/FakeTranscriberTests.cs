@@ -173,6 +173,65 @@ public sealed class FakeTranscriberTests
     }
 
     [TestMethod]
+    public async Task StatsAndLagFollowARunAndRunSpeedSummarizesIt()
+    {
+        await using var transcriber = await LoadAsync();
+        Assert.AreEqual(LagState.Idle, transcriber.Lag.State);
+        Assert.IsNull(transcriber.RunSpeed);
+
+        var stats = new List<TranscriberStats>();
+        transcriber.Stats += (_, s) =>
+        {
+            lock (stats)
+            {
+                stats.Add(s);
+            }
+        };
+
+        // About 8 s of audio at twice real time: more than 10 ticks, so at least one STATS event.
+        var frame = new float[SampleRate / 10];
+        var states = new HashSet<LagState>();
+        transcriber.Start(AudioSource.Push);
+        for (int i = 0; i < 80; i++)
+        {
+            transcriber.Push(frame, SampleRate, 1);
+            Thread.Sleep(50);
+            states.Add(transcriber.Lag.State);
+        }
+        Wait.Until(() => { lock (stats) { return stats.Count > 0; } }, "a STATS event");
+        await transcriber.StopAsync();
+
+        Assert.IsFalse(states.Contains(LagState.Idle), "Lag read Idle while running.");
+        Assert.IsFalse(states.Contains(LagState.Behind), "The instant fake decoder fell behind.");
+        Assert.AreEqual(LagState.Idle, transcriber.Lag.State);
+
+        TranscriberStats first;
+        lock (stats)
+        {
+            first = stats[0];
+        }
+        Assert.AreEqual("fake", first.Backend);
+        Assert.AreEqual(10, first.Ticks);
+        Assert.IsTrue(first.NewMs > 0, "STATS has no new audio.");
+        Assert.IsTrue(first.SpeechMs > 0, "The fake VAD reports all audio as speech.");
+        Assert.AreSame(stats[^1], transcriber.LastStats);
+
+        RunSpeed? speed = transcriber.RunSpeed;
+        Assert.IsNotNull(speed);
+        Assert.AreEqual("fake", speed.Backend);
+        Assert.IsTrue(speed.Samples >= 1);
+        Assert.IsTrue(speed.Speech > TimeSpan.Zero);
+        Assert.IsTrue(speed.Duration >= TimeSpan.FromSeconds(3), $"Duration {speed.Duration}.");
+        Assert.IsTrue(speed.SpeechLoadP95 >= speed.SpeechLoadMedian);
+        Assert.AreEqual(0, speed.BehindShare);
+
+        // The summary of the stopped run stays until the next Start, which starts a new one.
+        transcriber.Start(AudioSource.Push);
+        Assert.AreEqual(0, transcriber.RunSpeed!.Samples);
+        await transcriber.StopAsync();
+    }
+
+    [TestMethod]
     public void StartWithoutAModelIsRejected()
     {
         using var transcriber = new EchoirTranscriber();

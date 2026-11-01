@@ -107,6 +107,43 @@ TEST_CASE("live: push returns while a decode is blocked") {
     session.stop();
 }
 
+TEST_CASE("live: lag grows while a decode is blocked, and is read without waiting for it") {
+    ts::LiveBackend backend;
+    ts::LiveVad vad;
+    ts::EventLog log;
+    std::atomic<bool> gate{false};
+    backend.before_decode = [&gate] {
+        for (int i = 0; i < 5000 && !gate.load(); ++i) {
+            std::this_thread::sleep_for(1ms);
+        }
+    };
+    echoir::Session session(backend, vad, SessionConfig{},
+                            [&log](const SessionEvent& ev) { log.add(ev); });
+    std::size_t phase = 0;
+    session.start();
+    session.push(audio(1000, true, phase), 16000, 1);
+    REQUIRE(ts::wait_for([&backend] { return backend.decodes.load() == 1; }));
+    for (int i = 0; i < 20; ++i) {
+        session.push(audio(100, true, phase), 16000, 1);
+    }
+
+    const auto began = std::chrono::steady_clock::now();
+    REQUIRE(ts::wait_for([&session] { return session.lag().tick_ms > 0; }));
+    const echoir::SessionLag lag = session.lag();
+    CHECK(std::chrono::steady_clock::now() - began < 1s);
+    CHECK(lag.head_ms == 3000);
+    CHECK(lag.decoded_ms == 0);
+    CHECK(lag.backlog_ms == 3000);
+
+    gate = true;
+    // Once the worker catches up, only audio below min_chunk_ms can be left.
+    REQUIRE(ts::wait_for([&session] {
+        const echoir::SessionLag now = session.lag();
+        return now.tick_ms == 0 && now.backlog_ms <= 500;
+    }));
+    session.stop();
+}
+
 TEST_CASE("live: no callback runs after stop returns") {
     ts::LiveBackend backend;
     ts::LiveVad vad;

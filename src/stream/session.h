@@ -94,6 +94,15 @@ struct SessionEvent {
     std::string detail;  // ERROR: the message. STATS: the JSON object
 };
 
+// How far the decoding is behind the audio taken in, on the session timeline. backlog_ms is
+// head_ms - decoded_ms: the audio waiting for a tick, plus the new audio of the tick that runs.
+struct SessionLag {
+    std::int64_t head_ms = 0;     // audio taken in
+    std::int64_t decoded_ms = 0;  // end of the window of the latest tick that finished
+    std::int64_t backlog_ms = 0;
+    std::int64_t tick_ms = 0;  // how long the running tick has run; 0 between ticks
+};
+
 // Receives the events in order. It runs on the thread that drives the session (see the threading
 // notes on Session). A sink that throws loses that event, and the session goes on.
 using SessionSink = std::function<void(const SessionEvent&)>;
@@ -164,6 +173,10 @@ public:
     // from a sink and after stop().
     const stream::AudioStore& audio() const noexcept { return store_; }
 
+    // How far the decoding is behind. Thread-safe and lock-free, so it never waits for a decode,
+    // also from a sink and after stop().
+    SessionLag lag() const noexcept;
+
 private:
     enum class Mode { unset, pull, live };
 
@@ -209,8 +222,9 @@ private:
     // time of window[0], in samples. Returns the window index where the carried audio starts.
     // With finish set, it finalizes the ongoing segment and returns the window size. The one
     // exception is a forced cut, which returns the cut: the remainder still needs a decode.
+    // speech_samples is increased by the length of the speech ranges that were decoded.
     std::size_t analyze(const std::vector<float>& window, bool finish, std::int64_t origin,
-                        State& st, std::vector<SessionEvent>& events);
+                        State& st, std::vector<SessionEvent>& events, std::int64_t& speech_samples);
     // Sends the events in order, skipping text from before the generation was bumped by clear().
     void deliver(const std::vector<SessionEvent>& events, std::uint64_t generation);
     void emit_locked(const SessionEvent& event);
@@ -268,6 +282,13 @@ private:
     std::uint64_t run_generation_ = 0;
 
     TickStats stats_;  // decode_mu_: ticks since the last STATS event
+
+    // For lag(). head_samples_ changes with pending_ (under audio_mu_), decoded_samples_ when a
+    // tick commits or gives up its window, tick_started_ns_ while a tick runs (steady clock, 0
+    // between ticks). They are read without a lock, so lag() may see one before the other changes.
+    std::atomic<std::int64_t> head_samples_{0};
+    std::atomic<std::int64_t> decoded_samples_{0};
+    std::atomic<std::int64_t> tick_started_ns_{0};
 
     std::thread worker_;           // lifecycle_mu_
     bool worker_running_ = false;  // worker_mu_

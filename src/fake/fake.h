@@ -11,7 +11,9 @@
 namespace echoir::fake {
 
 // Decodes to "fake <n>", where n is the number of 100 ms blocks of audio, so the text grows as a
-// segment grows. It takes no prefix, so rollback is refused, as on Whisper.
+// segment grows. It takes no prefix, so rollback is refused, as on Whisper. With
+// ECHOIR_FAKE_DECODE_RTF set (0..10), each decode sleeps that many times the length of its audio,
+// so a host can see a session that keeps up (below 1) or falls behind (above 1).
 std::unique_ptr<IAsrBackend> make_backend();
 
 // Reports all audio as speech, split into segments of ECHOIR_FAKE_SEGMENT_MS milliseconds (default

@@ -77,8 +77,8 @@ the JSON text that the library returns.
 
 - A handle (engine or session) is used by one thread at a time.
 - `echoir_session_push_f32()`, `echoir_session_push_s16()`, `echoir_session_read_audio()`,
-  `echoir_session_read_peaks()` and `echoir_session_set_input_muted()` are thread-safe. They can run on
-  any thread, in either driving mode.
+  `echoir_session_read_peaks()`, `echoir_session_set_input_muted()` and `echoir_session_read_lag()`
+  are thread-safe. They can run on any thread, in either driving mode.
 - Callbacks run on the thread that drives the session. In mode A, that is the thread that calls
   `echoir_session_process()`, `echoir_session_flush()`, `echoir_session_reset()` or
   `echoir_session_clear()`. In mode B, it is the session's worker thread.
@@ -441,6 +441,27 @@ timeline keeps running, and the VAD ends the ongoing segment. The store keeps th
 set to 0, the audio is passed through again. The change applies from the next audio the session
 converts.
 
+```c
+typedef struct {
+  uint32_t struct_size;  /* sizeof(echoir_lag), set by the caller */
+  int64_t  head_ms;      /* audio taken in */
+  int64_t  decoded_ms;   /* end of the window of the latest tick that finished */
+  int64_t  backlog_ms;   /* head_ms - decoded_ms */
+  int64_t  tick_ms;      /* how long the running tick has run; 0 between ticks */
+} echoir_lag;
+
+echoir_status echoir_session_read_lag(echoir_session* session, echoir_lag* out);
+```
+
+How far the decoding is behind the audio the session took in, in ms on the session timeline.
+`backlog_ms` is the audio that waits for a tick plus the new audio of the tick that runs. While the
+decoder keeps up it stays near `min_chunk_ms` plus one decode, rising during each decode and dropping
+when it ends. When it grows steadily, the decoder is slower than real time. The call never waits for a
+decode, so it can be polled for a display.
+
+Set `struct_size` to `sizeof(echoir_lag)` first; a later version writes only the fields that fit it.
+It returns `ECHOIR_ERR_INVALID_ARG` for a NULL `out` or a `struct_size` below this version's struct.
+
 ### Capture
 
 ```c
@@ -547,11 +568,16 @@ typedef struct {
 The `detail` of a STATS event is a JSON object:
 
 ```json
-{"rtf":0.12,"decode_ms":180,"window_ms":2600,"backend":"qwen3-asr"}
+{"rtf":0.12,"decode_ms":180,"window_ms":2600,"ticks":10,"new_ms":1000,"speech_ms":800,
+ "decode_max_ms":400,"load":0.18,"speech_load":0.2,"backend":"qwen3-asr"}
 ```
 
-`rtf` is the decode time over the audio time. `decode_ms` and `window_ms` are the mean decode time and
-the mean length of the audio decoded per tick, in ms. `backend` names the backend.
+`rtf` is the decode time over the audio time of the windows, carried audio included. `decode_ms` and
+`window_ms` are the mean decode time and the mean length of the audio decoded per tick, in ms. `ticks`
+is the number of ticks covered, `new_ms` the mean audio a tick took in, `speech_ms` the mean length of
+the speech it decoded, and `decode_max_ms` the slowest tick. `load` is the decode time over the new
+audio: at 1 or more the session cannot keep up. `speech_load` is the same over the ticks that decoded
+speech, and 0 when none did. `backend` names the backend.
 
 `detail` is NULL for every event type except ERROR and STATS.
 
