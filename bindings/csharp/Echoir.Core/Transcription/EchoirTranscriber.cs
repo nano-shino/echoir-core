@@ -639,8 +639,10 @@ public sealed class EchoirTranscriber : IDisposable, IAsyncDisposable
                 return new Notification(NotificationKind.Cleared, 0, 0, 0, string.Empty);
             case NativeValues.EventError:
                 return new Notification(NotificationKind.Error, 0, 0, 0, Text(ev.Detail));
-            default:
+            case NativeValues.EventStats:
                 // STATS is sent, but this binding does not surface it yet.
+                return null;
+            default:
                 return null;
         }
     }

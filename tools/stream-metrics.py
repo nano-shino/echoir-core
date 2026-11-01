@@ -3,7 +3,7 @@
 Each case is streamed by `echoir transcribe --stream` once per stabilization policy and minimum
 chunk. The rewrite rate is the share of PARTIAL updates that do not extend the previous PARTIAL of
 their segment. One JSON record per run goes to standard output. Transcripts are never printed, so
-the output can be kept when the fixtures are private.
+the output holds no text from the fixtures.
 """
 
 import argparse

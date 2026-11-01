@@ -23,6 +23,10 @@ set_target_properties(echoir_c_header_test PROPERTIES
   C_STANDARD_REQUIRED ON
   C_EXTENSIONS OFF)
 target_link_libraries(echoir_c_header_test PRIVATE echoir_options echoir)
+if(NOT TARGET echoir_engine)
+  # Without the engine every session call reports ECHOIR_ERR_NOT_IMPLEMENTED.
+  target_compile_definitions(echoir_c_header_test PRIVATE ECHOIR_TEST_NO_ENGINE)
+endif()
 
 add_test(NAME c_header COMMAND echoir_c_header_test)
 set_tests_properties(c_header PROPERTIES LABELS unit)

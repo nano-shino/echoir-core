@@ -100,7 +100,8 @@ typedef struct {
   int32_t     stream_policy;           // echoir_stream_policy; default ECHOIR_POLICY_DEFAULT
   // How many ms of the newest audio the session keeps for echoir_session_read_audio(), as 16 kHz
   // mono 16-bit samples (about 1.9 MB per minute). Default 0: no audio is kept. The level envelope
-  // of echoir_session_read_peaks() is kept either way.
+  // of echoir_session_read_peaks() is kept either way. A negative value makes
+  // echoir_session_create() fail.
   int32_t     retain_audio_ms;
 } echoir_session_params;
 

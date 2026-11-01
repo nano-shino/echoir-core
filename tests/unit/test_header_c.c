@@ -44,14 +44,19 @@ int main(void) {
     EXPECT(echoir_engine_create(&ep) == NULL);
 #endif
     EXPECT(echoir_session_create(NULL, &sp, NULL, NULL) == NULL);
-    EXPECT(echoir_session_poll(NULL, &ev) == ECHOIR_ERR_INVALID_ARG);
-    EXPECT(echoir_session_start(NULL) == ECHOIR_ERR_INVALID_ARG);
+#ifdef ECHOIR_TEST_NO_ENGINE
+#define NULL_SESSION_STATUS ECHOIR_ERR_NOT_IMPLEMENTED
+#else
+#define NULL_SESSION_STATUS ECHOIR_ERR_INVALID_ARG
+#endif
+    EXPECT(echoir_session_poll(NULL, &ev) == NULL_SESSION_STATUS);
+    EXPECT(echoir_session_start(NULL) == NULL_SESSION_STATUS);
     EXPECT(strstr(echoir_last_error(), "echoir_session_start") != NULL);
     {
         size_t n = 1;
-        EXPECT(echoir_session_read_audio(NULL, 0, 10, NULL, 0, &n) == ECHOIR_ERR_INVALID_ARG);
-        EXPECT(echoir_session_read_peaks(NULL, 0, 10, 10, NULL, 0, &n) == ECHOIR_ERR_INVALID_ARG);
-        EXPECT(echoir_session_set_input_muted(NULL, 1) == ECHOIR_ERR_INVALID_ARG);
+        EXPECT(echoir_session_read_audio(NULL, 0, 10, NULL, 0, &n) == NULL_SESSION_STATUS);
+        EXPECT(echoir_session_read_peaks(NULL, 0, 10, 10, NULL, 0, &n) == NULL_SESSION_STATUS);
+        EXPECT(echoir_session_set_input_muted(NULL, 1) == NULL_SESSION_STATUS);
     }
 
     /* A session params struct from a newer header is refused, and so is an unknown policy. Both

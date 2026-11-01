@@ -22,7 +22,9 @@ before the first release.
 - A C ABI (`include/echoir/echoir.h`) and a C# binding, `Echoir.Core`.
 - The `echoir` command-line tool: `transcribe`, `bench`, `score`, `devices`, `models`, and `serve`,
   a JSON-lines service for host processes.
-- CPU, Metal (macOS, iOS) and Vulkan (Windows) GPU backends. On Android the CPU backend ships in one build per ARM feature set (dotprod, fp16, i8mm, SVE2, SME), and the best one the device runs is loaded.
+- CPU, Metal (macOS, iOS) and Vulkan (Windows) GPU backends. On Android the CPU backend ships in
+  one build per ARM feature set (dotprod, fp16, i8mm, SVE2, SME), and the best one the device runs
+  is loaded.
 
 The context prompt is not in the C ABI yet. The command line and `echoir serve` take one.
 
@@ -46,8 +48,7 @@ project version, shown here as `<version>`:
 
 The desktop archives hold the `echoir` command line, the libraries it uses,
 `models/registry.json`, the license notices, and the full third-party license texts in `licenses/`.
-Each release also has `SHA256SUMS`. Model files
-are not in the archives.
+Each release also has `SHA256SUMS`. Model files are not in the archives.
 
 ### Get a model
 
@@ -72,10 +73,24 @@ folder and transcribe a WAV file. Use the path to the clone in place of `/path/t
   --models-dir /path/to/echoir-core/models
 ```
 
-On Windows, run `echoir.exe` with the same arguments. Each output line is one speech range, with
-its start and end time and its text. For Qwen3-ASR, use `--backend qwen --model qwen3-asr-0.6b-q8_0`
+On Windows, run `echoir.exe` with the same arguments. Each output line is one segment, with its
+start and end time and its text. For Qwen3-ASR, use `--backend qwen --model qwen3-asr-0.6b-q8_0`
 and fetch that model and `firered-vad-v1`. The [command-line reference](docs/cli.md) covers the
 rest.
+
+### Stream from a microphone
+
+`--stream` runs the audio through a streaming session, as live audio would arrive. `mic` is the
+default microphone:
+
+```sh
+./echoir transcribe mic --stream --model whisper-tiny-en \
+  --models-dir /path/to/echoir-core/models
+```
+
+Live capture runs until Ctrl-C, or for `--duration` seconds. `echoir devices` lists the devices
+with their indexes; `--input mic:<device>` picks one, and `--input loopback` (Windows) captures
+what the machine plays.
 
 ## Build from source
 
@@ -90,7 +105,10 @@ cd echoir-core
 ```
 
 If you cloned without `--recursive`, run `git submodule update --init --recursive` in the clone.
-Then build and test:
+On Windows, llama.cpp has paths longer than 260 characters, so clone with
+`git -c core.longpaths=true clone --recursive ...`, or run `git config --global core.longpaths true`
+first.
+Then build and test. This is the macOS example:
 
 ```sh
 brew install cmake ninja
@@ -104,14 +122,26 @@ which takes several minutes.
 
 | Preset | What it builds |
 |---|---|
-| `macos-cpu` | macOS arm64, CPU only |
-| `macos-metal` | macOS arm64 with the ggml Metal backend. The Metal kernels compile at runtime, so the first model load is slower. |
+| `macos-cpu` | macOS arm64, CPU only. The baseline for tests. |
+| `macos-metal` | macOS arm64 with the ggml Metal backend. The Metal kernels compile at runtime, so the first model load is slower. CI builds it. |
+| `macos-metal-quick` | Test preset for `macos-metal`: the unit, C ABI, CLI and integration tests, without the e2e, long and stress labels. CI runs it. |
 | `macos-static` | macOS arm64, CPU only, with static libraries |
-| `windows-cpu-x64` | Windows x64 with MSVC and Ninja. Built and tested in CI. |
-| `windows-vulkan-x64` | Windows x64 with MSVC, Ninja and the Vulkan SDK. Built and tested locally, not in CI. |
-| `linux-cpu`, `android-arm64`, `ios-arm64`, `ios-arm64-simulator` | Presets for the release archives. They have no test preset. |
+| `macos-tsan` | macOS arm64, CPU only, with ThreadSanitizer. Its test preset runs the `unit` and `stress` labels. |
+| `linux-cpu` | Linux x64, CPU only, with Ninja. CI builds and tests it with GCC. |
+| `windows-cpu-x64` | Windows x64 with MSVC and Ninja. CI builds and tests it. |
+| `windows-vulkan-x64` | Windows x64 with MSVC, Ninja and the Vulkan SDK. CI builds it and the release packages it, but does not test it: the runners have no GPU. |
+| `android-arm64`, `ios-arm64`, `ios-arm64-simulator` | Builds for the mobile release archives. They have no test preset. Android needs `ANDROID_NDK_HOME`, and iOS needs full Xcode. |
 
 `cmake --list-presets` shows only the presets for the current host.
+
+### Linux
+
+```sh
+sudo apt-get install -y ninja-build
+cmake --preset linux-cpu
+cmake --build --preset linux-cpu
+ctest --preset linux-cpu
+```
 
 ### Windows
 
@@ -151,11 +181,52 @@ needs only the base class library. Its
 [README](bindings/csharp/README.md) describes the projects, how the native libraries are found, and
 how to pack the NuGet package.
 
+A short example. It downloads a model, loads it, and prints the segments of the microphone until
+Enter is pressed:
+
+```csharp
+using System.Collections.Specialized;
+using Echoir.Core;
+
+string modelsDir = "models";
+const string modelId = "whisper-tiny-en";
+
+// Downloads the model and its default VAD into modelsDir. Files already there are skipped.
+await new EchoirModels().DownloadAsync(modelId, modelsDir);
+
+using var transcriber = new EchoirTranscriber();
+await transcriber.LoadAsync(modelId, modelsDir);
+
+transcriber.Error += (_, e) => Console.Error.WriteLine(e.Message);
+
+// Finished segments are added to Transcript.Finals in order. Transcript.Partial holds the
+// segment still in progress.
+((INotifyCollectionChanged)transcriber.Transcript.Finals).CollectionChanged += (_, e) =>
+{
+    if (e.NewItems is null)
+    {
+        return;
+    }
+    foreach (Segment segment in e.NewItems.OfType<Segment>())
+    {
+        Console.WriteLine($"[{segment.StartMs} - {segment.EndMs} ms] {segment.Text}");
+    }
+};
+
+transcriber.Start(AudioSource.Mic); // the default microphone
+Console.ReadLine();                 // speak, then press Enter
+await transcriber.StopAsync();
+```
+
+For audio the host has, use `AudioSource.Push` and call `Push(samples, sampleRate, channels)` with
+the samples. `EchoirModels.Catalogue(modelsDir)` lists the models and whether their files are
+present.
+
 ## C API
 
-`include/echoir/echoir.h` is the public C ABI. It documents each function and struct. For a host
-that cannot link the library, `echoir serve --stdio` runs the same engine as a JSON-lines service.
-[docs/protocol.md](docs/protocol.md) describes its commands and events.
+`include/echoir/echoir.h` is the public C ABI. [docs/c-api.md](docs/c-api.md) is the reference for
+it. For a host that cannot link the library, `echoir serve --stdio` runs the same engine as a
+JSON-lines service. [docs/protocol.md](docs/protocol.md) describes its commands and events.
 
 ## Models and fixtures
 
@@ -180,16 +251,32 @@ the Python standard library only and runs on any host.
 
 `echoir` is the command-line tool. It has these subcommands:
 
-- `transcribe` transcribes a WAV file, standard input or a microphone, either whole (`--offline`)
-  or through a streaming session (`--stream`).
+- `transcribe` transcribes a WAV file, standard input or a capture device, either whole
+  (`--offline`) or through a streaming session (`--stream`).
 - `bench` transcribes one file with several models and scores each transcript. With `--stream`, it
   also pushes the audio at its own speed and reports the first partial and the final latency.
 - `score` scores a transcript against a reference text.
-- `devices` lists the capture devices, and `models` shows the model registry.
-- `serve --stdio` runs a JSON-lines service for a host process.
+- `devices` lists the capture devices and the loopback devices, and `models` shows the model
+  registry (`models list`, and `models path ID` for the files of one model).
+- `serve --stdio` runs a JSON-lines service for a host process. It reads commands on standard
+  input and writes events and replies on standard output.
 
 ```sh
+# Transcribe a WAV file in one pass.
 build/macos-cpu/bin/echoir transcribe tests/fixtures/jfk.wav --model whisper-tiny-en --offline
+
+# Stream the file in steps, as live audio would arrive, and print each segment when it is final.
+build/macos-cpu/bin/echoir transcribe tests/fixtures/jfk.wav --model whisper-tiny-en --stream
+
+# Stream from the microphone for 30 seconds.
+build/macos-cpu/bin/echoir transcribe mic --stream --duration 30 --model whisper-tiny-en
+
+# Run each model on a file, and report the streaming latency of each.
+build/macos-cpu/bin/echoir bench tests/fixtures/jfk.wav --ref tests/fixtures/jfk.ref.txt \
+  --model whisper-tiny-en --stream
+
+# Run the JSON-lines service (see docs/protocol.md).
+build/macos-cpu/bin/echoir serve --stdio
 ```
 
 The [command-line reference](docs/cli.md) describes every option and output format.
@@ -212,8 +299,8 @@ The [command-line reference](docs/cli.md) describes every option and output form
   case whose model files or fixture are not on disk is reported as skipped. The runner is
   `tests/e2e/run_e2e.py`, which needs Python 3 and only its standard library. The cases exist only
   when CMake finds Python and the command-line tool is built (`ECHOIR_WITH_WHISPER=ON`).
-- `qwen_stream_golden` (label `long`): the Qwen streaming cases on real models, about 100 s. Run it by
-  name, for example `ctest --preset macos-cpu -R qwen_stream_golden`.
+- `qwen_stream_golden` (label `long`): the Qwen streaming cases on real models, about 100 s. Run it
+  by name, for example `ctest --preset macos-cpu -R qwen_stream_golden`.
 - `stress_live` (labels `long` and `stress`): a 60 s live-mode stress run on scripted backends, with
   no models. It runs under `macos-tsan`.
 
@@ -233,9 +320,9 @@ To run one label, add a filter, for example `ctest --preset macos-cpu -L unit`.
 - `bindings/csharp/`: the C# binding and its tests.
 - `tests/`: unit and integration tests, the end-to-end cases in `tests/e2e/`, and the committed
   fixtures.
-- `tools/`: model download, the FireRedVAD converter and fixture generation. `tools/dev/` holds
-  development-only tools, described in its README.
-- `docs/`: the command-line reference and the JSON-lines protocol.
+- `tools/`: model download, the FireRedVAD converter, fixture generation, packaging and the lint
+  script. `tools/dev/` holds development-only tools, described in its README.
+- `docs/`: the command-line reference, the C ABI reference and the JSON-lines protocol.
 - `third_party/`: the whisper.cpp and llama.cpp submodules, and vendored single-header libraries
   (doctest, miniaudio, CLI11, nlohmann/json). Each library keeps its license file next to it.
 
