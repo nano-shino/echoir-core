@@ -251,13 +251,14 @@ ECHOIR_API echoir_status  echoir_session_read_audio(echoir_session*, int64_t sta
                                                     size_t* n_frames);
 
 // The level envelope of [start_ms, end_ms): one min/max pair (full scale ±1) per bucket of
-// bucket_ms, a positive multiple of 10. The envelope keeps one pair per 10 ms for the whole
-// session. out_minmax holds 2 floats per bucket, min then max, for cap buckets, and *n_buckets is
-// set to the number written. end_ms is clamped to the newest whole 10 ms, and the last bucket may
-// be shorter. With out_minmax NULL, only *n_buckets is set: the number the range needs. The count
-// over [0, INT64_MAX) at bucket_ms 10 is the envelope's length in 10 ms steps, and its newest
-// bucket is the input level. Returns ECHOIR_ERR_INVALID_ARG for a bad bucket_ms, a negative start_ms, end_ms before
-// start_ms, n_buckets NULL, or a cap too small for the range.
+// bucket_ms. The envelope keeps one pair per 10 ms cell for the whole session. A bucket is
+// bucket_ms of audio, a positive multiple of 10, so it spans whole cells. out_minmax holds 2
+// floats per bucket, min then max, for cap buckets, and *n_buckets is set to the number written.
+// end_ms is clamped to the newest whole 10 ms, and the last bucket may be shorter. With
+// out_minmax NULL, only *n_buckets is set: the number the range needs. The count over
+// [0, INT64_MAX) at bucket_ms 10 is the envelope's length in cells, and its newest bucket is the
+// input level. Returns ECHOIR_ERR_INVALID_ARG for a bad bucket_ms, a negative start_ms, end_ms
+// before start_ms, n_buckets NULL, or a cap too small for the range.
 ECHOIR_API echoir_status  echoir_session_read_peaks(echoir_session*, int64_t start_ms,
                                                     int64_t end_ms, int32_t bucket_ms,
                                                     float* out_minmax, size_t cap,

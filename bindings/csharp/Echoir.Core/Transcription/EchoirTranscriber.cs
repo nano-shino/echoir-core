@@ -13,8 +13,8 @@ public sealed class EchoirTranscriber : IDisposable, IAsyncDisposable
 {
     private const int PollIntervalMs = 33;
 
-    // The envelope keeps one min/max pair per this many ms, so its count is in steps of it.
-    private const int PeakStepMs = 10;
+    // The envelope keeps one min/max pair per this many ms, so its count is in cells of it.
+    private const int PeakCellMs = 10;
 
     // The window that Level reads.
     private const int LevelWindowMs = 50;
@@ -409,11 +409,11 @@ public sealed class EchoirTranscriber : IDisposable, IAsyncDisposable
             }
             IntPtr handle = _session.DangerousGetHandle();
             long newest = EnvelopeEndLocked(handle);
-            // The store keeps the newest _retainAudioMs. The envelope counts whole steps, so its
-            // newest end can be up to one step behind the audio, and the oldest kept ms is taken
-            // as one step later. The estimate is never older than the store, so the core does not
+            // The store keeps the newest _retainAudioMs. The envelope counts whole cells, so its
+            // newest end can be up to one cell behind the audio, and the oldest kept ms is taken
+            // as one cell later. The estimate is never older than the store, so the core does not
             // evict a part that is read here.
-            long oldest = newest + PeakStepMs - _retainAudioMs;
+            long oldest = newest + PeakCellMs - _retainAudioMs;
             long start = Math.Max(Math.Max(segment.StartMs - padMs, oldest), 0);
             if (start > segment.StartMs || segment.StartMs >= newest)
             {
@@ -846,14 +846,14 @@ public sealed class EchoirTranscriber : IDisposable, IAsyncDisposable
         return (int)ms;
     }
 
-    // Lock held. The end of the level envelope in ms: its count of 10 ms steps. Zero before any
+    // Lock held. The end of the level envelope in ms: its count of 10 ms cells. Zero before any
     // audio.
     private static unsafe long EnvelopeEndLocked(IntPtr session)
     {
-        nuint steps;
-        int status = NativeMethods.SessionReadPeaks(session, 0, long.MaxValue, PeakStepMs, null, 0, &steps);
+        nuint cells;
+        int status = NativeMethods.SessionReadPeaks(session, 0, long.MaxValue, PeakCellMs, null, 0, &cells);
         EchoirException.ThrowIfFailed(status, "echoir_session_read_peaks");
-        return (long)steps * PeakStepMs;
+        return (long)cells * PeakCellMs;
     }
 
     // Lock held. The envelope of [startMs, endMs) in buckets of bucketMs. The end must not be past
