@@ -28,7 +28,7 @@ own thread, so events can arrive at any moment while it runs (see [Ordering](#or
 
 Every command is an object with a string field `cmd`. Other fields are listed below. Unknown
 fields are ignored. An optional field may be omitted, or set to `null`, to take its default. A
-required field must be present.
+required field must be present and not `null`.
 
 | `cmd` | Fields | Effect | Reply |
 |---|---|---|---|
@@ -51,14 +51,15 @@ session runs.
 |---|---|---|---|
 | `model` | string | required | A registry id, such as `whisper-tiny-en` or `qwen3-asr-0.6b-q8_0`, or the path of a model file. |
 | `backend` | string | from the registry | `whisper` or `qwen`. Required when `model` is a file path. When both are given, they must agree. |
-| `mmproj` | string | from the registry | The Qwen projector: a registry id or a file. Only for `qwen`. |
+| `mmproj` | string | from the registry | The Qwen projector: a registry id or a file. Only for `qwen`, and required for `qwen` when `model` is a file. |
 | `vad` | string | the backend's default VAD | A registry id or a file. The default is `silero-v6.2.0` for `whisper` and `firered-vad-v1` for `qwen`. |
 | `gpu` | boolean | `true` | Use the GPU when this build has one. |
 | `threads` | integer | `0` | Threads for decoding. `0` takes the default. |
 
 The held models are released before the new ones load, so a failed load leaves no model loaded.
 Reply: `ok`. Errors: a failed load, an unknown registry id, a `backend` that is not `whisper` or
-`qwen`, or a session that is still running (`send stop first`).
+`qwen` or does not match the registry id's backend, a file `model` with no `backend`, an `mmproj`
+that does not fit the backend, or a session that is still running (`send stop first`).
 
 ### `start`
 
@@ -68,16 +69,16 @@ input.
 | Field | Type | Default | Meaning |
 |---|---|---|---|
 | `input` | string | required | `push`: the host sends audio with `audio` commands. `mic`: the default microphone, or `device`. `loopback`: system audio (Windows only). |
-| `device` | string | the default device | For `mic` and `loopback`: a device index from `devices`, or part of a device name, not case-sensitive. |
+| `device` | string | the default device | For `mic` and `loopback`: a device index from `devices`, or part of a device name, not case-sensitive. A string of digits is always an index. Otherwise the part of the name must match exactly one device. |
 | `language` | string | `auto` | `auto` to detect the language, or an ISO code such as `en`. |
 | `policy` | string | the backend default | `agreement` or `rollback`. The backend default is `rollback` for `qwen` and `agreement` for `whisper`. `rollback` needs a backend with decoder-prefix support, so it fails on `whisper`. |
 | `context` | string | none | Text sent with every decode, such as proper names. |
 | `min_chunk_ms` | integer | `500` | Audio that must be pending before a decode runs, in milliseconds. `0` or more. |
 
 Reply: `ok`, once the session is running. Errors: no model loaded, a session already running, an
-unknown `input`, an unsupported `policy`, a `language` the model does not have, or a device that
-cannot open. With `mic` or `loopback`, the service captures the audio itself, so `audio` is
-refused.
+unknown `input`, an unsupported `policy`, a `language` the model does not have, a `device` that
+matches no device or more than one, or a device that cannot open. With `mic` or `loopback`, the
+service captures the audio itself, so `audio` is refused.
 
 With the default device (no `device`), the capture follows the system default. When the system has
 no device at all, it waits, sending nothing, and resumes when one appears. A chosen `device` that
@@ -179,7 +180,7 @@ Times are milliseconds from the start of the session, or from the last `reset`. 
 **`stats`** reports the speed of the decoding. It is sent after every 10 ticks that decode audio,
 and it covers those ticks. `rtf` is their decode time over their audio time. `decode_ms` and
 `window_ms` are the mean decode time and the mean length of the audio decoded per tick, in ms.
-`backend` names the backend. A stats event has no `id`, `start_ms`, `end_ms` or `text`:
+`backend` is `whisper` or `qwen3-asr`. A stats event has no `id`, `start_ms`, `end_ms` or `text`:
 
 ```json
 {"type":"stats","rtf":0.12,"decode_ms":180,"window_ms":2600,"backend":"qwen3-asr"}
