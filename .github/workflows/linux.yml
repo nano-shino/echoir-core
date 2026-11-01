@@ -23,26 +23,10 @@ concurrency:
   group: linux-${{ github.ref }}
   cancel-in-progress: true
 
-# The cpu-x64 job runs in four shards on separate runners, the same split as windows.yml. The e2e
-# cases run on Windows for pull requests, so here a pull request runs only the core shard. Pushes to
-# main run every shard.
 jobs:
   cpu-x64:
-    name: cpu-x64 (${{ matrix.shard }})
     runs-on: ubuntu-24.04
     timeout-minutes: 60
-    strategy:
-      fail-fast: false
-      matrix:
-        include:
-          - shard: core
-            select: '-E "^e2e\."'
-          - shard: e2e-whisper
-            select: '-R "^e2e\.whisper_"'
-          - shard: e2e-qwen-rollback
-            select: '-R "^e2e\.qwen_.*rollback"'
-          - shard: e2e-qwen
-            select: '-R "^e2e\.qwen_" -E rollback'
     steps:
       - uses: actions/checkout@v4
         with:
@@ -66,7 +50,6 @@ jobs:
           key: models-${{ hashFiles('models/registry.json') }}-e2e
 
       - name: Fetch models
-        if: github.event_name != 'pull_request' || matrix.shard == 'core'
         run: tools/fetch-models.sh whisper-tiny-en whisper-large-v3-turbo-q5_0 silero-v6.2.0 qwen3-asr-0.6b-q8_0 firered-vad-v1
 
       - name: Compiler cache
@@ -97,13 +80,12 @@ jobs:
 
       # -V prints every test's output, so the doctest summary and the SKIP lines are visible.
       - name: Test
-        if: github.event_name != 'pull_request' || matrix.shard == 'core'
-        run: ctest --preset linux-cpu -V ${{ matrix.select }}
+        run: ctest --preset linux-cpu -V
 
       - name: Upload test log
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: linux-cpu-${{ matrix.shard }}-testlog
+          name: linux-cpu-testlog
           path: build/linux-cpu/Testing/Temporary/LastTest.log
           if-no-files-found: ignore
