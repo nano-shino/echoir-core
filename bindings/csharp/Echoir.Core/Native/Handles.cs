@@ -41,3 +41,20 @@ internal sealed class SessionHandle : SafeHandleZeroOrMinusOneIsInvalid
         return true;
     }
 }
+
+// Owns an echoir_tape. Sessions that write the tape hold their own native reference, so the
+// handle may be released before them.
+internal sealed class TapeHandle : SafeHandleZeroOrMinusOneIsInvalid
+{
+    public TapeHandle(nint tape) : base(ownsHandle: true)
+    {
+        SetHandle(tape);
+    }
+
+    protected override bool ReleaseHandle()
+    {
+        // Closes the tape first if it is still open.
+        NativeMethods.TapeFree(handle);
+        return true;
+    }
+}

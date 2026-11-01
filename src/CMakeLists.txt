@@ -54,7 +54,7 @@ endif()
 add_library(echoir_pure STATIC ${ECHOIR_PURE_SOURCES})
 target_include_directories(echoir_pure PUBLIC
   "${CMAKE_CURRENT_SOURCE_DIR}" "${PROJECT_SOURCE_DIR}/include")
-target_link_libraries(echoir_pure PUBLIC echoir_single PRIVATE echoir_options)
+target_link_libraries(echoir_pure PUBLIC echoir_single PRIVATE echoir_options opus)
 
 # Model-backed core: src/vad (Silero through whisper_vad_*, FireRedVAD on ggml) and src/backends
 # (IAsrBackend, WhisperBackend, QwenBackend). Built only when libwhisper is, because Silero needs

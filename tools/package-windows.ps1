@@ -98,7 +98,8 @@ try {
     if ($singleLicenses.Count -eq 0) { throw 'No third_party\single\*.LICENSE.txt files were found.' }
     $licenseFiles = @(
         @{ Source = Join-Path $root 'third_party\whisper.cpp\LICENSE'; Name = 'whisper.cpp.LICENSE.txt' },
-        @{ Source = Join-Path $root 'third_party\llama.cpp\LICENSE'; Name = 'llama.cpp.LICENSE.txt' })
+        @{ Source = Join-Path $root 'third_party\llama.cpp\LICENSE'; Name = 'llama.cpp.LICENSE.txt' },
+        @{ Source = Join-Path $root 'third_party\opus\COPYING'; Name = 'opus.LICENSE.txt' })
     $licenseFiles += $singleLicenses | ForEach-Object { @{ Source = $_.FullName; Name = $_.Name } }
     $licenseFiles += Get-ChildItem -Path (Join-Path $root 'third_party\licenses') -Filter '*.txt' |
         ForEach-Object { @{ Source = $_.FullName; Name = $_.Name } }

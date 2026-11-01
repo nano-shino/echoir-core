@@ -22,6 +22,7 @@
 #include "models/devices.h"
 #include "models/registry.h"
 #include "models/resolve.h"
+#include "stream/tape.h"
 #include "text/utf.h"
 
 #ifdef ECHOIR_HAS_ENGINE
@@ -91,6 +92,11 @@ echoir_status status_of_current_exception(const char* fn) noexcept {
 }
 
 }  // namespace
+
+// A tape handle. Sessions that write the tape hold their own reference to it.
+struct echoir_tape {
+    std::shared_ptr<echoir::stream::Tape> tape;
+};
 
 #ifdef ECHOIR_HAS_ENGINE
 // What echoir_engine_create loads. A session takes the backend and the VAD from here, and at most
@@ -386,6 +392,8 @@ echoir::SessionConfig session_config_from_abi(const echoir_session_params& param
     constexpr size_t kEndOfStreamPolicy = kEndOfEmitPartials + sizeof(params.stream_policy);
     constexpr size_t kEndOfRetainAudio =
         offsetof(echoir_session_params, retain_audio_ms) + sizeof(params.retain_audio_ms);
+    constexpr size_t kEndOfTapeTrack =
+        offsetof(echoir_session_params, tape_track) + sizeof(params.tape_track);
     if (params.struct_size < kEndOfEmitPartials) {
         throw std::invalid_argument("struct_size is smaller than the fields up to emit_partials");
     }
@@ -419,6 +427,14 @@ echoir::SessionConfig session_config_from_abi(const echoir_session_params& param
             throw std::invalid_argument("retain_audio_ms must not be negative");
         }
         config.retain_audio_ms = params.retain_audio_ms;
+    }
+    // The tape and its track are read together: a struct that ends between them has no tape.
+    if (params.struct_size >= kEndOfTapeTrack && params.tape != nullptr) {
+        if (params.tape_track == nullptr || params.tape_track[0] == '\0') {
+            throw std::invalid_argument("tape_track is required with a tape");
+        }
+        config.tape = params.tape->tape;
+        config.tape_track = params.tape_track;
     }
     return config;
 }
@@ -638,7 +654,7 @@ echoir_status echoir_session_read_audio(echoir_session* s, int64_t start_ms, int
     }
     *n_frames = 0;
     return run_session_call(s, fn, [&](echoir::Session& session) {
-        *n_frames = session.audio().read_audio(start_ms, end_ms, out, cap);
+        *n_frames = session.read_audio(start_ms, end_ms, out, cap);
     });
 }
 
@@ -652,7 +668,7 @@ echoir_status echoir_session_read_peaks(echoir_session* s, int64_t start_ms, int
     }
     *n_buckets = 0;
     return run_session_call(s, fn, [&](echoir::Session& session) {
-        *n_buckets = session.audio().read_peaks(start_ms, end_ms, bucket_ms, out_minmax, cap);
+        *n_buckets = session.read_peaks(start_ms, end_ms, bucket_ms, out_minmax, cap);
     });
 }
 
@@ -685,6 +701,20 @@ echoir_status echoir_session_read_lag(echoir_session* s, echoir_lag* out) {
         out->decoded_ms = lag.decoded_ms;
         out->backlog_ms = lag.backlog_ms;
         out->tick_ms = lag.tick_ms;
+    });
+}
+echoir_status echoir_session_tape_offset_ms(echoir_session* s, int64_t* out_ms) {
+    const char* fn = "echoir_session_tape_offset_ms";
+    if (out_ms == nullptr) {
+        set_last_error(fn, "out_ms must not be NULL");
+        return ECHOIR_ERR_INVALID_ARG;
+    }
+    return run_session_call(s, fn, [out_ms](echoir::Session& session) {
+        const std::int64_t offset = session.tape_offset_ms();
+        if (offset < 0) {
+            throw echoir::StateError("the session has no tape");
+        }
+        *out_ms = offset;
     });
 }
 #else
@@ -752,4 +782,114 @@ echoir_status echoir_session_set_input_muted(echoir_session*, int32_t) {
 echoir_status echoir_session_read_lag(echoir_session*, echoir_lag*) {
     return not_built("echoir_session_read_lag");
 }
+
+echoir_status echoir_session_tape_offset_ms(echoir_session*, int64_t*) {
+    return not_built("echoir_session_tape_offset_ms");
+}
 #endif
+
+namespace {
+
+// Runs call on the tape of t, mapping exceptions to a status.
+template <typename Call>
+echoir_status run_tape_call(echoir_tape* t, const char* fn, Call&& call) noexcept {
+    if (t == nullptr) {
+        set_last_error(fn, "tape must not be NULL");
+        return ECHOIR_ERR_INVALID_ARG;
+    }
+    try {
+        call(*t->tape);
+        return ECHOIR_OK;
+    } catch (...) {
+        return status_of_current_exception(fn);
+    }
+}
+
+}  // namespace
+
+echoir_tape* echoir_tape_create(const char* folder) {
+    const char* fn = "echoir_tape_create";
+    try {
+        const std::filesystem::path path = folder != nullptr && folder[0] != '\0'
+                                               ? echoir::text::path_from_utf8(folder)
+                                               : std::filesystem::path();
+        auto t = std::make_unique<echoir_tape>();
+        t->tape = echoir::stream::Tape::create(path);
+        return t.release();
+    } catch (...) {
+        status_of_current_exception(fn);
+        return nullptr;
+    }
+}
+
+echoir_status echoir_tape_add_track(echoir_tape* t, const char* name, const char* label) {
+    const char* fn = "echoir_tape_add_track";
+    if (name == nullptr) {
+        set_last_error(fn, "name must not be NULL");
+        return ECHOIR_ERR_INVALID_ARG;
+    }
+    return run_tape_call(t, fn, [&](echoir::stream::Tape& tape) {
+        tape.add_track(name, label != nullptr ? label : "");
+    });
+}
+
+const char* echoir_tape_tracks_json(echoir_tape* t) {
+    const char* result = nullptr;
+    const echoir_status status = run_tape_call(
+        t, "echoir_tape_tracks_json",
+        [&](echoir::stream::Tape& tape) { result = set_json_result(tape.tracks_json()); });
+    return status == ECHOIR_OK ? result : nullptr;
+}
+
+echoir_status echoir_tape_duration_ms(echoir_tape* t, int64_t* out_ms) {
+    const char* fn = "echoir_tape_duration_ms";
+    if (out_ms == nullptr) {
+        set_last_error(fn, "out_ms must not be NULL");
+        return ECHOIR_ERR_INVALID_ARG;
+    }
+    return run_tape_call(t, fn,
+                         [out_ms](echoir::stream::Tape& tape) { *out_ms = tape.duration_ms(); });
+}
+
+echoir_status echoir_tape_read_audio(echoir_tape* t, const char* track, int64_t start_ms,
+                                     int64_t end_ms, int16_t* out, size_t cap, size_t* n_frames) {
+    const char* fn = "echoir_tape_read_audio";
+    if (n_frames == nullptr || track == nullptr) {
+        set_last_error(fn, "track and n_frames must not be NULL");
+        return ECHOIR_ERR_INVALID_ARG;
+    }
+    *n_frames = 0;
+    return run_tape_call(t, fn, [&](echoir::stream::Tape& tape) {
+        *n_frames = tape.read_audio(track, start_ms, end_ms, out, cap);
+    });
+}
+
+echoir_status echoir_tape_read_peaks(echoir_tape* t, const char* track, int64_t start_ms,
+                                     int64_t end_ms, int32_t bucket_ms, float* out_minmax,
+                                     size_t cap, size_t* n_buckets) {
+    const char* fn = "echoir_tape_read_peaks";
+    if (n_buckets == nullptr || track == nullptr) {
+        set_last_error(fn, "track and n_buckets must not be NULL");
+        return ECHOIR_ERR_INVALID_ARG;
+    }
+    *n_buckets = 0;
+    return run_tape_call(t, fn, [&](echoir::stream::Tape& tape) {
+        *n_buckets = tape.read_peaks(track, start_ms, end_ms, bucket_ms, out_minmax, cap);
+    });
+}
+
+echoir_status echoir_tape_close(echoir_tape* t) {
+    return run_tape_call(t, "echoir_tape_close", [](echoir::stream::Tape& tape) { tape.close(); });
+}
+
+void echoir_tape_free(echoir_tape* t) {
+    if (t == nullptr) {
+        return;
+    }
+    // A close that fails leaves the page files, which is all that can be done here.
+    try {
+        t->tape->close();
+    } catch (...) {
+    }
+    delete t;
+}

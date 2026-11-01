@@ -277,3 +277,63 @@ TEST_CASE("fake build: read_lag reports the audio not yet decoded") {
     echoir_session_free(session);
     echoir_engine_free(engine);
 }
+
+TEST_CASE("fake sessions write a tape through the C ABI, one run after another") {
+    echoir_engine* engine = create_engine();
+    REQUIRE(engine != nullptr);
+    echoir_tape* tape = echoir_tape_create(nullptr);
+    REQUIRE(tape != nullptr);
+
+    echoir_session_params params{};
+    echoir_session_params_init(&params);
+    CHECK(params.tape == nullptr);
+    CHECK(params.tape_track == nullptr);
+    params.tape = tape;
+    // A tape needs a track name.
+    CHECK(echoir_session_create(engine, &params, nullptr, nullptr) == nullptr);
+    CHECK(std::string(echoir_last_error()).find("tape_track") != std::string::npos);
+    params.tape_track = "mic";
+
+    const std::vector<float> pcm = speech(15 * kBlock);
+    echoir_session* first = echoir_session_create(engine, &params, nullptr, nullptr);
+    REQUIRE(first != nullptr);
+    std::int64_t offset = -1;
+    REQUIRE(echoir_session_tape_offset_ms(first, &offset) == ECHOIR_OK);
+    CHECK(offset == 0);
+    REQUIRE(echoir_session_push_f32(first, pcm.data(), 15 * kBlock, kSampleRate, 1) == ECHOIR_OK);
+    echoir_session_free(first);
+
+    // The tape outlives its first session; the second one starts after it. The handle can go
+    // before the session: the session keeps the tape.
+    echoir_session* second = echoir_session_create(engine, &params, nullptr, nullptr);
+    REQUIRE(second != nullptr);
+    REQUIRE(echoir_session_tape_offset_ms(second, &offset) == ECHOIR_OK);
+    CHECK(offset == 1500);
+    REQUIRE(echoir_session_push_f32(second, pcm.data(), 5 * kBlock, kSampleRate, 1) == ECHOIR_OK);
+    size_t n = 0;
+    REQUIRE(echoir_session_read_audio(second, 0, INT64_MAX, nullptr, 0, &n) == ECHOIR_OK);
+    CHECK(n == 500 * 16);
+    REQUIRE(echoir_tape_read_audio(tape, "mic", 0, INT64_MAX, nullptr, 0, &n) == ECHOIR_OK);
+    CHECK(n == 2000 * 16);
+    REQUIRE(echoir_session_read_peaks(second, 0, INT64_MAX, 10, nullptr, 0, &n) == ECHOIR_OK);
+    CHECK(n == 50);
+    std::int64_t duration = 0;
+    REQUIRE(echoir_tape_duration_ms(tape, &duration) == ECHOIR_OK);
+    CHECK(duration == 2000);
+    echoir_tape_free(tape);
+    // The closed tape kept no folder, so the session's audio is gone; the envelope is not.
+    CHECK(echoir_session_read_audio(second, 0, 100, nullptr, 0, &n) == ECHOIR_ERR_STATE);
+    CHECK(echoir_session_read_peaks(second, 0, INT64_MAX, 10, nullptr, 0, &n) == ECHOIR_OK);
+    CHECK(n == 50);
+    echoir_session_free(second);
+
+    // A struct from an older header ends before the tape fields: they are not read.
+    echoir_session_params old{};
+    echoir_session_params_init(&old);
+    old.struct_size = static_cast<std::uint32_t>(offsetof(echoir_session_params, tape));
+    echoir_session* plain = echoir_session_create(engine, &old, nullptr, nullptr);
+    REQUIRE(plain != nullptr);
+    CHECK(echoir_session_tape_offset_ms(plain, &offset) == ECHOIR_ERR_STATE);
+    echoir_session_free(plain);
+    echoir_engine_free(engine);
+}

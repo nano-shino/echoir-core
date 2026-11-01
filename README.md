@@ -19,6 +19,9 @@ before the first release.
   or by a live worker thread.
 - Voice activity detection with Silero and FireRedVAD.
 - Live capture from microphones, and from loopback devices on Windows, through miniaudio.
+- A session tape that keeps the audio of a whole recording across sessions and model switches, on
+  one timeline with a track per input: the newest 2 minutes in memory, older audio as Opus pages on
+  disk, joined into one Ogg Opus file per track at the end. Reads go by time range.
 - A C ABI (`include/echoir/echoir.h`) and a C# binding, `Echoir.Core`.
 - The `echoir` command-line tool: `transcribe`, `bench`, `score`, `devices`, `models`, and `serve`,
   a JSON-lines service for host processes.
@@ -97,7 +100,7 @@ what the machine plays.
 You need CMake 3.24 or newer, Ninja, and a C++20 compiler. The macOS presets use Apple clang 17
 on Apple silicon and do not need the full Xcode.
 
-Clone the repository with its submodules, which are whisper.cpp and llama.cpp:
+Clone the repository with its submodules, which are whisper.cpp, llama.cpp and libopus:
 
 ```sh
 git clone --recursive https://github.com/nano-shino/echoir-core.git
@@ -171,8 +174,8 @@ Build options:
 | `GGML_VULKAN` | `OFF` | ggml Vulkan backend |
 | `GGML_CUDA` | `OFF` | ggml CUDA backend |
 
-If a submodule is missing, CMake warns and skips the backends that need it. The unit tests still
-build.
+If the whisper.cpp or llama.cpp submodule is missing, CMake warns and skips the backends that need
+it. The unit tests still build. libopus is always needed.
 
 ## C# binding
 
@@ -221,6 +224,14 @@ await transcriber.StopAsync();
 For audio the host has, use `AudioSource.Push` and call `Push(samples, sampleRate, channels)` with
 the samples. `EchoirModels.Catalogue(modelsDir)` lists the models and whether their files are
 present.
+
+To keep the audio of every run, create an `EchoirTape` and pass it in `TranscriberOptions.Tape`.
+Each run then writes its track (`mic`, `system` or `TapeTrack`) after the previous one, and
+`tape.TryReadAudio(track, startMs, endMs, out samples)` reads any range back, whatever run or model
+made it. `TranscriberOptions.Tape` also makes `TryReadAudio` and `ReadPeaks` of the transcriber read
+through to the tape, and `TapeOffsetMs` places the run's segment times on it.
+`TranscribeSamplesAsync` decodes a range of samples on the loaded model apart from the live
+transcript, for example to decode a stretch again with another model after a run.
 
 ## C API
 
@@ -323,7 +334,7 @@ To run one label, add a filter, for example `ctest --preset macos-cpu -L unit`.
 - `tools/`: model download, the FireRedVAD converter, fixture generation, packaging and the lint
   script. `tools/dev/` holds development-only tools, described in its README.
 - `docs/`: the command-line reference, the C ABI reference and the JSON-lines protocol.
-- `third_party/`: the whisper.cpp and llama.cpp submodules, and vendored single-header libraries
+- `third_party/`: the whisper.cpp, llama.cpp and libopus submodules, and vendored single-header libraries
   (doctest, miniaudio, CLI11, nlohmann/json). Each library keeps its license file next to it.
 
 ## Conventions

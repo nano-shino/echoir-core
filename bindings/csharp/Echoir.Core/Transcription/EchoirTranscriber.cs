@@ -41,6 +41,12 @@ public sealed class EchoirTranscriber : IDisposable, IAsyncDisposable
 
     // The RetainAudio of the current session, in ms. Read with the session, under _native.
     private int _retainAudioMs;
+
+    // The tape of the current session, or null. Read with the session, under _native.
+    private EchoirTape? _tape;
+
+    // True while TranscribeSamplesAsync runs a session of its own on the engine. Under _native.
+    private bool _transcribingSamples;
     private Poller? _poller;
     private SynchronizationContext? _context;
     private bool _disposed;
@@ -166,6 +172,25 @@ public sealed class EchoirTranscriber : IDisposable, IAsyncDisposable
         }
     }
 
+    // Where time 0 of the current or last run is on its tape, in ms, so a segment of the run is at
+    // TapeOffsetMs + its times on the tape. Null when the run has no tape, or before the first run.
+    public unsafe long? TapeOffsetMs
+    {
+        get
+        {
+            lock (_native)
+            {
+                if (_session is null || _tape is null)
+                {
+                    return null;
+                }
+                long ms;
+                int status = NativeMethods.SessionTapeOffsetMs(_session.DangerousGetHandle(), &ms);
+                return status == NativeValues.StatusOk ? ms : null;
+            }
+        }
+    }
+
     // Replaces the audio entering the session with silence of the same length, so the timeline
     // keeps running and the VAD ends the ongoing segment. The silence is kept like any audio. Set
     // it while running: it is ignored otherwise, and it is cleared when the transcriber stops.
@@ -274,12 +299,18 @@ public sealed class EchoirTranscriber : IDisposable, IAsyncDisposable
             {
                 throw new InvalidOperationException("The transcriber is running. Call StopAsync first.");
             }
+            if (_transcribingSamples)
+            {
+                throw new InvalidOperationException("TranscribeSamplesAsync is running. Wait for it first.");
+            }
 
             // Each run gets its own session. The engine serves one session at a time, so the
             // stopped one goes first.
             ReleaseSessionLocked();
-            _session = CreateSession(_engine, options);
+            string track = options.TapeTrack ?? (source == AudioSource.Loopback ? "system" : "mic");
+            _session = CreateSession(_engine, options, track);
             _retainAudioMs = RetainAudioMs(options);
+            _tape = options.Tape;
             Volatile.Write(ref _context, context);
 
             int status;
@@ -393,27 +424,32 @@ public sealed class EchoirTranscriber : IDisposable, IAsyncDisposable
         Notify();
     }
 
-    // Copies the audio of a segment as 16 kHz mono samples, with padMs of audio before and after
-    // it. The padding is cut short at the start of the timeline and where the session no longer
-    // keeps audio (RetainAudio). Returns false, with an empty array, when the session keeps no
-    // audio, or when the audio of the segment itself is gone.
+    // Copies the audio of a segment of the current or last run as 16 kHz mono samples, with padMs
+    // of audio before and after it. The padding is cut short at the start of the run's timeline
+    // and where the audio is no longer kept (RetainAudio, or the 2 minutes of a tape without a
+    // folder). With a tape, audio older than 2 minutes is decoded from its pages. Returns false,
+    // with an empty array, when the run keeps no audio, or when the audio of the segment itself is
+    // gone. Throws ArgumentOutOfRangeException for a negative padMs.
     public unsafe bool TryReadAudio(Segment segment, out short[] samples, int padMs = 150)
     {
         ArgumentOutOfRangeException.ThrowIfNegative(padMs);
         samples = Array.Empty<short>();
         lock (_native)
         {
-            if (_session is null || _retainAudioMs == 0)
+            long keptMs = _tape is null ? _retainAudioMs
+                : _tape.Folder is null ? (long)EchoirTape.MemoryWindow.TotalMilliseconds
+                : long.MaxValue / 4;
+            if (_session is null || keptMs == 0)
             {
                 return false;
             }
             IntPtr handle = _session.DangerousGetHandle();
             long newest = EnvelopeEndLocked(handle);
-            // The store keeps the newest _retainAudioMs. The envelope counts whole cells, so its
-            // newest end can be up to one cell behind the audio, and the oldest kept ms is taken
-            // as one cell later. The estimate is never older than the store, so the core does not
-            // evict a part that is read here.
-            long oldest = newest + PeakCellMs - _retainAudioMs;
+            // The store keeps the newest keptMs. The envelope counts whole cells, so its newest end
+            // can be up to one cell behind the audio, and the oldest kept ms is taken as one cell
+            // later. The estimate is never older than the store, so the core does not evict a part
+            // that is read here.
+            long oldest = newest + PeakCellMs - keptMs;
             long start = Math.Max(Math.Max(segment.StartMs - padMs, oldest), 0);
             if (start > segment.StartMs || segment.StartMs >= newest)
             {
@@ -813,9 +849,10 @@ public sealed class EchoirTranscriber : IDisposable, IAsyncDisposable
         return new EngineHandle(engine);
     }
 
-    private static unsafe SessionHandle CreateSession(EngineHandle engine, TranscriberOptions options)
+    private static unsafe SessionHandle CreateSession(EngineHandle engine, TranscriberOptions options, string? tapeTrack)
     {
         using var language = Utf8String.Create(options.Language);
+        using var track = Utf8String.Create(options.Tape is null ? null : tapeTrack);
 
         SessionParams parameters = default;
         NativeMethods.SessionParamsInit(&parameters);
@@ -825,13 +862,130 @@ public sealed class EchoirTranscriber : IDisposable, IAsyncDisposable
         parameters.EmitPartials = options.EmitPartials ? 1 : 0;
         parameters.StreamPolicy = (int)options.Policy;
         parameters.RetainAudioMs = RetainAudioMs(options);
+        parameters.TapeTrack = track.Pointer;
 
-        nint session = NativeMethods.SessionCreate(engine.DangerousGetHandle(), &parameters, 0, 0);
+        // The tape handle is kept alive for the call; the session then holds its own reference.
+        nint session;
+        if (options.Tape is not null)
+        {
+            using EchoirTape.Lease tapeLease = EchoirTape.Lease.Take(options.Tape.Handle);
+            parameters.Tape = tapeLease.Handle;
+            session = NativeMethods.SessionCreate(engine.DangerousGetHandle(), &parameters, 0, 0);
+        }
+        else
+        {
+            session = NativeMethods.SessionCreate(engine.DangerousGetHandle(), &parameters, 0, 0);
+        }
         if (session == 0)
         {
             throw EchoirException.FromLastError(EchoirStatus.InvalidArgument, "echoir_session_create");
         }
         return new SessionHandle(engine, session);
+    }
+
+    // Transcribes 16 kHz mono samples on the loaded model, apart from the live transcript: a
+    // session of its own takes the samples, decodes them all, and the FINAL texts come back joined
+    // by spaces. Nothing is raised and Transcript does not change. options.Tape is not used, so the
+    // audio is not written to a tape again. For re-decoding a stretch of a tape after a run: the
+    // engine serves one session at a time, so this throws InvalidOperationException while the
+    // transcriber runs, and Start throws while this runs. Runs on a thread pool thread; a cancel is
+    // seen between seconds of audio. An ERROR from the decoder fails it with an EchoirException.
+    public async Task<string> TranscribeSamplesAsync(
+        short[] samples,
+        TranscriberOptions? options = null,
+        CancellationToken cancellationToken = default)
+    {
+        ArgumentNullException.ThrowIfNull(samples);
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        options = (options ?? new TranscriberOptions()) with { Tape = null };
+
+        SessionHandle session;
+        lock (_native)
+        {
+            if (_engine is null)
+            {
+                throw new InvalidOperationException("No model is loaded. Call LoadAsync first.");
+            }
+            if (_running || _transcribingSamples)
+            {
+                throw new InvalidOperationException("The transcriber is busy. Call StopAsync first.");
+            }
+            // The engine serves one session at a time, so the stopped run's session goes first.
+            ReleaseSessionLocked();
+            session = CreateSession(_engine, options, null);
+            _transcribingSamples = true;
+        }
+        try
+        {
+            return await Task.Run(() => DecodeSamples(session, samples, cancellationToken), cancellationToken);
+        }
+        finally
+        {
+            lock (_native)
+            {
+                _transcribingSamples = false;
+            }
+            session.Dispose();
+        }
+    }
+
+    // The body of TranscribeSamplesAsync: pull mode, one second of audio per decode step.
+    private static unsafe string DecodeSamples(SessionHandle session, short[] samples, CancellationToken cancellationToken)
+    {
+        const int Step = 16000;
+        nint handle = session.DangerousGetHandle();
+        var finals = new List<string>();
+        string? error = null;
+
+        void Collect()
+        {
+            EventData ev = default;
+            while (NativeMethods.SessionPoll(handle, &ev) == NativeValues.StatusOk)
+            {
+                if (ev.Type == NativeValues.EventFinal)
+                {
+                    string text = Text(ev.Text);
+                    if (text.Length > 0)
+                    {
+                        finals.Add(text);
+                    }
+                }
+                else if (ev.Type == NativeValues.EventError)
+                {
+                    error ??= Text(ev.Detail);
+                }
+            }
+        }
+
+        for (int at = 0; at < samples.Length; at += Step)
+        {
+            cancellationToken.ThrowIfCancellationRequested();
+            int n = Math.Min(Step, samples.Length - at);
+            int status;
+            fixed (short* pcm = &samples[at])
+            {
+                status = NativeMethods.SessionPushS16(handle, pcm, (nuint)n, 16000, 1);
+            }
+            EchoirException.ThrowIfFailed(status, "echoir_session_push_s16");
+            status = NativeMethods.SessionProcess(handle);
+            Collect();
+            if (status != NativeValues.StatusOk)
+            {
+                throw EchoirException.FromLastError((EchoirStatus)status, "echoir_session_process");
+            }
+        }
+        cancellationToken.ThrowIfCancellationRequested();
+        int flushed = NativeMethods.SessionFlush(handle);
+        Collect();
+        if (flushed != NativeValues.StatusOk)
+        {
+            throw EchoirException.FromLastError((EchoirStatus)flushed, "echoir_session_flush");
+        }
+        if (error is not null)
+        {
+            throw new EchoirException(EchoirStatus.Backend, error);
+        }
+        return string.Join(' ', finals);
     }
 
     // The RetainAudio option in ms, as the core takes it.

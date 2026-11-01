@@ -234,6 +234,10 @@ Session::Session(IAsrBackend& backend, vad::IVad& vad, SessionConfig config, Ses
     }
     min_chunk_samples_ = config_.min_chunk_ms * stream::kSamplesPerMs;
     max_segment_samples_ = config_.max_segment_ms * stream::kSamplesPerMs;
+    // Last, so a session that fails a check above starts no run on the tape.
+    if (config_.tape) {
+        tape_writer_ = config_.tape->attach(config_.tape_track);
+    }
 }
 
 Session::~Session() {
@@ -818,7 +822,12 @@ void Session::take_in(std::size_t from) {
     if (input_muted_.load()) {
         std::fill(begin, pending_.end(), 0.0f);
     }
-    store_.append(std::span<const float>(pending_).subspan(from));
+    const auto taken = std::span<const float>(pending_).subspan(from);
+    if (tape_writer_) {
+        tape_writer_->append(taken);
+    } else {
+        store_.append(taken);
+    }
     head_samples_.fetch_add(static_cast<std::int64_t>(pending_.size() - from));
 }
 
@@ -826,8 +835,13 @@ void Session::drop_state() {
     {
         std::lock_guard<std::mutex> audio(audio_mu_);
         pending_.clear();
-        // The timeline restarts at 0, so the kept audio restarts with it.
-        store_.clear();
+        // The timeline restarts at 0, so the kept audio restarts with it. On a tape, the old run
+        // stays and a new one starts at the end of the tape.
+        if (tape_writer_) {
+            tape_writer_->restart();
+        } else {
+            store_.clear();
+        }
         head_samples_.store(0);
         decoded_samples_.store(0);
     }
@@ -836,6 +850,55 @@ void Session::drop_state() {
     state_.next_id = next_id;
     carry_.clear();
     origin_samples_ = 0;
+}
+
+std::size_t Session::read_audio(std::int64_t start_ms, std::int64_t end_ms, std::int16_t* out,
+                                std::size_t cap) const {
+    if (!tape_writer_) {
+        return store_.read_audio(start_ms, end_ms, out, cap);
+    }
+    if (start_ms < 0) {
+        throw std::invalid_argument("start_ms must not be negative");
+    }
+    if (end_ms < start_ms) {
+        throw std::invalid_argument("end_ms must not be before start_ms");
+    }
+    const std::int64_t base = tape_writer_->start_samples();
+    const std::int64_t head = head_samples_.load();
+    // Clamped to the session's own audio before the run's start is added, so nothing overflows.
+    const std::int64_t newest_ms = head / stream::kSamplesPerMs + 1;
+    if (start_ms >= newest_ms) {
+        return 0;
+    }
+    const std::int64_t base_ms = base / stream::kSamplesPerMs;
+    return config_.tape->read_audio(tape_writer_->track(), base_ms + start_ms,
+                                    base_ms + std::min(end_ms, newest_ms), out, cap, base + head);
+}
+
+std::size_t Session::read_peaks(std::int64_t start_ms, std::int64_t end_ms, std::int64_t bucket_ms,
+                                float* out, std::size_t cap) const {
+    if (!tape_writer_) {
+        return store_.read_peaks(start_ms, end_ms, bucket_ms, out, cap);
+    }
+    if (start_ms < 0) {
+        throw std::invalid_argument("start_ms must not be negative");
+    }
+    if (end_ms < start_ms) {
+        throw std::invalid_argument("end_ms must not be before start_ms");
+    }
+    const std::int64_t base = tape_writer_->start_samples();
+    const std::int64_t head = head_samples_.load();
+    constexpr std::int64_t kCell = stream::Envelope::kCellMs * stream::kSamplesPerMs;
+    // The run starts on a whole cell, so the session's cells are the tape's from base / kCell.
+    const std::int64_t limit_ms = (head / kCell + 1) * stream::Envelope::kCellMs;
+    const std::int64_t base_ms = base / stream::kSamplesPerMs;
+    return config_.tape->read_peaks(tape_writer_->track(), base_ms + std::min(start_ms, limit_ms),
+                                    base_ms + std::min(end_ms, limit_ms), bucket_ms, out, cap,
+                                    base / kCell + head / kCell);
+}
+
+std::int64_t Session::tape_offset_ms() const noexcept {
+    return tape_writer_ ? tape_writer_->start_samples() / stream::kSamplesPerMs : -1;
 }
 
 }  // namespace echoir

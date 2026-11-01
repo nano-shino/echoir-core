@@ -13,8 +13,11 @@
 //
 // The session keeps the audio it takes in, after conversion to 16 kHz mono (see AudioStore): the
 // newest retain_audio_ms of samples and a level envelope of the whole timeline, for hosts that
-// show or replay it. Both restart with the timeline at reset(). Input can be muted: muted audio is
-// replaced by silence of the same length, so the timeline keeps running.
+// show or replay it. Both restart with the timeline at reset(). With a tape (stream/tape.h) in the
+// config, the audio and the envelope go to a track of the tape instead, and retain_audio_ms is not
+// used: the session's timeline starts where its run starts on the tape, and reset() starts a new
+// run. Input can be muted: muted audio is replaced by silence of the same length, so the timeline
+// keeps running.
 //
 // Two ways to drive a session, and a session uses only one of them:
 //  - pull: the caller runs process() on its own thread, and sinks run on that thread.
@@ -34,6 +37,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <functional>
+#include <memory>
 #include <mutex>
 #include <optional>
 #include <span>
@@ -45,6 +49,7 @@
 #include "backends/asr_backend.h"
 #include "echoir/echoir.h"
 #include "stream/audio_store.h"
+#include "stream/tape.h"
 #include "stream/tick_stats.h"
 #include "text/stabilizer.h"
 #include "vad/vad.h"
@@ -75,8 +80,12 @@ struct SessionConfig {
     // each later one drops rollback_tokens tokens from the end of the previous output.
     int unfixed_decodes = 2;
     int rollback_tokens = 5;
-    // How much of the newest audio is kept for read_audio(). 0 keeps none.
+    // How much of the newest audio is kept for read_audio(). 0 keeps none. Not used with a tape.
     std::int64_t retain_audio_ms = 0;
+    // The tape that keeps the session's audio, and the track it goes to. The track is added when
+    // the tape has none of that name. Null keeps the audio in the session (retain_audio_ms).
+    std::shared_ptr<stream::Tape> tape;
+    std::string tape_track;
     // A STATS event is sent after every this many ticks that decode audio. 0 sends none. The C ABI
     // and the CLI pass kStatsEveryTicks.
     int stats_every_ticks = 0;
@@ -112,7 +121,8 @@ public:
     // Throws std::invalid_argument if min_chunk_ms is negative, if max_segment_ms is below 200 (the
     // quietest-point search needs room for a 100 ms block), if unfixed_decodes or rollback_tokens
     // is negative, if retain_audio_ms is negative, if the policy is rollback and the backend has no
-    // prefix support, or if sink is empty.
+    // prefix support, if sink is empty, or if a tape is given with a bad track name. Throws
+    // StateError when the tape is closed or its track already has a writer.
     Session(IAsrBackend& backend, vad::IVad& vad, SessionConfig config, SessionSink sink);
     // Stops the worker, if one runs. Destroying the session from its own sink aborts the process:
     // the worker would keep running on members that are already gone.
@@ -169,9 +179,18 @@ public:
     // so the VAD ends the ongoing segment and timestamps keep running. Thread-safe.
     void set_input_muted(bool muted) noexcept { input_muted_.store(muted); }
 
-    // The kept audio and its envelope, on the session timeline. See AudioStore. Thread-safe, also
-    // from a sink and after stop().
-    const stream::AudioStore& audio() const noexcept { return store_; }
+    // The kept audio of [start_ms, end_ms) on the session timeline, as AudioStore::read_audio, from
+    // the store or the tape. With a tape, a range older than the tape keeps throws StateError like
+    // an evicted one. Thread-safe, also from a sink and after stop().
+    std::size_t read_audio(std::int64_t start_ms, std::int64_t end_ms, std::int16_t* out,
+                           std::size_t cap) const;
+    // The level envelope of [start_ms, end_ms) on the session timeline, as
+    // AudioStore::read_peaks, from the store or the tape. Thread-safe, also from a sink and after
+    // stop().
+    std::size_t read_peaks(std::int64_t start_ms, std::int64_t end_ms, std::int64_t bucket_ms,
+                           float* out, std::size_t cap) const;
+    // Where session time 0 is on the tape, in ms; -1 without a tape. It moves at reset().
+    std::int64_t tape_offset_ms() const noexcept;
 
     // How far the decoding is behind. Thread-safe and lock-free, so it never waits for a decode,
     // also from a sink and after stop().
@@ -273,6 +292,8 @@ private:
     std::uint64_t generation_ = 0;               // text_mu_: bumped by clear()
     stream::AudioStore store_;                   // written under audio_mu_, read under its own lock
     std::atomic<bool> input_muted_{false};
+    // With a tape: the session's run on its track. Appended under audio_mu_.
+    std::unique_ptr<stream::Tape::Writer> tape_writer_;
 
     std::vector<float> carry_;         // decode_mu_: audio carried into the next tick
     std::int64_t origin_samples_ = 0;  // decode_mu_: session time of carry_[0], in samples
