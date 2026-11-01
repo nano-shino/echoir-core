@@ -3,10 +3,14 @@ namespace Echoir.Core;
 // Turns readings of the session backlog into a LagState. EchoirTranscriber feeds it about 30 times
 // a second while a session runs; a host may also feed it readings of its own.
 //
-// While a decoder keeps up, the backlog is a sawtooth: it climbs to min_chunk_ms plus one decode,
-// then drops when the decode ends. So the verdict reads the peak of the last two seconds against
-// that floor, and the slope of the last ten seconds, which is near zero for a sawtooth and
-// positive when the decoder falls behind. Not thread-safe.
+// While a decoder keeps up, the backlog is a sawtooth: it climbs during each decode and drops when
+// the decode ends. With a decode of d ms the peak is about max(min_chunk_ms, d) + d: a tick waits
+// for min_chunk_ms of audio, or, when decodes are longer, the next tick starts at once with the d ms
+// that came in meanwhile. The verdict reads the peak of the last two seconds against min_chunk_ms,
+// so the states say how far the captions trail the audio: a slow model that keeps up with long
+// decodes is Strained or Behind. The slope of the last ten seconds, near zero for a sawtooth and
+// positive while the decoder falls further behind, flags a growing backlog before it is large.
+// Not thread-safe.
 public sealed class LagMonitor
 {
     // A backlog peak this far above min_chunk_ms is Strained, and this far is Behind.

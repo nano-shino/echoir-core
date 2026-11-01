@@ -1,5 +1,6 @@
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <cstddef>
 #include <exception>
 #include <optional>
@@ -17,14 +18,20 @@ namespace {
 constexpr std::size_t kBlockSamples = 1600;
 constexpr double kMaxDecodeRtf = 10.0;
 
-// The decode delay per second of audio from ECHOIR_FAKE_DECODE_RTF. Missing or not a number: none.
+// The decode delay per second of audio from ECHOIR_FAKE_DECODE_RTF. Missing, not a whole finite
+// number (such as "2x", "nan" or "inf"): none.
 double decode_rtf_from_env() {
     const std::optional<std::string> text = text::get_env("ECHOIR_FAKE_DECODE_RTF");
     if (!text) {
         return 0.0;
     }
     try {
-        return std::clamp(std::stod(*text), 0.0, kMaxDecodeRtf);
+        std::size_t used = 0;
+        const double rtf = std::stod(*text, &used);
+        if (used != text->size() || !std::isfinite(rtf)) {
+            return 0.0;
+        }
+        return std::clamp(rtf, 0.0, kMaxDecodeRtf);
     } catch (const std::exception&) {
         return 0.0;
     }

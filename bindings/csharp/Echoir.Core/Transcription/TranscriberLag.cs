@@ -12,10 +12,11 @@ public enum LagState
     // The captions follow the audio within about a tick.
     Live,
 
-    // The decoder is close to its limit: the captions trail by a few seconds, or the backlog creeps up.
+    // The captions trail by a few seconds, from long decodes or a backlog that creeps up.
     Strained,
 
-    // The decoder is slower than real time: the backlog is large or keeps growing.
+    // The captions trail far behind: the decodes are very long, or the decoder is slower than real
+    // time and the backlog keeps growing.
     Behind,
 }
 
