@@ -1,0 +1,84 @@
+# macOS arm64 build and unit tests. Apple clang with Ninja, preset macos-metal (ggml Metal on).
+# The test preset macos-metal-quick runs the unit, C ABI, CLI usage and integration tests. The e2e,
+# long and stress labels are left out, so no models are fetched here.
+name: macos
+
+on:
+  push:
+    branches: [main]
+    paths-ignore: &unbuilt
+      - "**.md"
+      - "docs/**"
+      - "LICENSE"
+      - "THIRD_PARTY_NOTICES"
+      - "bindings/csharp/**"
+      - "tools/package-*"
+      - ".github/workflows/release.yml"
+  pull_request:
+    paths-ignore: *unbuilt
+  workflow_dispatch:
+
+concurrency:
+  group: macos-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  metal-arm64:
+    # Newest Xcode image. Apple's libc++ declares floating-point from_chars only for macOS 26.0 and later.
+    runs-on: macos-26
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Xcode
+        run: sudo xcode-select -s /Applications/Xcode_26.6.app
+
+      - run: brew list ninja >/dev/null 2>&1 || brew install ninja
+
+      - name: Tool versions
+        run: |
+          cmake --version
+          ninja --version
+          clang++ --version | head -1
+
+      - name: Compiler cache
+        uses: hendrikmuhs/ccache-action@v1.2
+        with:
+          key: macos-metal-arm64
+          max-size: 2G
+
+      # Not tuned for the runner (GGML_NATIVE=OFF), as in the other workflows: ccache keys on the
+      # literal -mcpu=native, so objects built on one runner CPU would be reused on another.
+      - name: Configure
+        run: >-
+          cmake --preset macos-metal
+          -DGGML_NATIVE=OFF
+          -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
+
+      - name: Build
+        run: cmake --build --preset macos-metal
+
+      - name: Compiler cache stats
+        run: ccache -s
+
+      # The generated fixtures (runon_en, silence_30s) come from the committed clips with
+      # the stdlib only.
+      - name: Generated fixtures
+        run: python3 -I tools/make-fixtures.py
+
+      # -V prints every test's output, so the doctest summary and the SKIP lines are visible.
+      - name: Test
+        run: ctest --preset macos-metal-quick -V
+
+      - name: Upload test log
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: macos-metal-testlog
+          path: build/macos-metal/Testing/Temporary/LastTest.log
+          if-no-files-found: ignore

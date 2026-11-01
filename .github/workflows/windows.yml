@@ -1,7 +1,7 @@
-# Windows x64 build and tests. MSVC + Ninja, preset windows-cpu-x64.
-# Unit and integration tests run, and so do the e2e cases. The models are fetched by
-# tools/fetch-models.ps1 and cached. A case whose model is missing skips; the Qwen 1.7B case does not
-# fetch its 2.2 GB model here and skips.
+# Windows x64 builds. MSVC + Ninja. The cpu-x64 job (preset windows-cpu-x64) runs the unit and
+# integration tests, and so do the e2e cases. The models are fetched by tools/fetch-models.ps1 and
+# cached. A case whose model is missing skips; the Qwen 1.7B case does not fetch its 2.2 GB model
+# here and skips. The vulkan-x64 job (preset windows-vulkan-x64) only builds: the runners have no GPU.
 name: windows
 
 on:
@@ -22,6 +22,9 @@ on:
 concurrency:
   group: windows-${{ github.ref }}
   cancel-in-progress: true
+
+env:
+  VULKAN_VERSION: 1.4.321.1
 
 jobs:
   cpu-x64:
@@ -91,3 +94,54 @@ jobs:
           name: windows-cpu-x64-testlog
           path: build/windows-cpu-x64/Testing/Temporary/LastTest.log
           if-no-files-found: ignore
+
+  vulkan-x64:
+    runs-on: windows-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - uses: ilammy/msvc-dev-cmd@v1
+        with:
+          arch: x64
+
+      # The same SDK install as the release workflow. Its glslc compiles the Vulkan shaders.
+      - name: Vulkan SDK
+        shell: pwsh
+        run: |
+          $installer = Join-Path $env:RUNNER_TEMP 'vulkan-sdk.exe'
+          curl.exe -fsSL -o $installer "https://sdk.lunarg.com/sdk/download/$env:VULKAN_VERSION/windows/vulkansdk-windows-X64-$env:VULKAN_VERSION.exe"
+          & $installer --accept-licenses --default-answer --confirm-command install | Out-Host
+          $sdk = "C:\VulkanSDK\$env:VULKAN_VERSION"
+          if (-not (Test-Path "$sdk\Bin\glslc.exe")) { throw "The Vulkan SDK did not install to $sdk." }
+          "VULKAN_SDK=$sdk" | Out-File -Append -Encoding utf8 $env:GITHUB_ENV
+          "$sdk\Bin" | Out-File -Append -Encoding utf8 $env:GITHUB_PATH
+
+      - name: Tool versions
+        shell: pwsh
+        run: |
+          cmake --version
+          ninja --version
+          glslc --version | Select-Object -First 1
+          cl 2>&1 | Select-Object -First 1
+
+      - name: Compiler cache
+        uses: hendrikmuhs/ccache-action@v1.2
+        with:
+          key: windows-vulkan-x64
+          max-size: 2G
+
+      # The same debug-info and ccache settings as the cpu-x64 job.
+      - name: Configure
+        run: >-
+          cmake --preset windows-vulkan-x64
+          -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
+          -DCMAKE_POLICY_DEFAULT_CMP0141=NEW -DCMAKE_MSVC_DEBUG_INFORMATION_FORMAT=Embedded
+
+      - name: Build
+        run: cmake --build --preset windows-vulkan-x64
+
+      - name: Compiler cache stats
+        run: ccache -s

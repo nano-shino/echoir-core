@@ -1,0 +1,68 @@
+# .NET binding tests on Linux x64. The fake build (scripted decoder and VAD, no model files) is built
+# with GCC and Ninja, and the fake-backend tests of Echoir.Core.Tests run against it. The real-model
+# tests are left out, because their models are not fetched here.
+# The test project copies only Windows DLLs next to the test host, so the Linux library is found
+# through LD_LIBRARY_PATH.
+name: dotnet
+
+on:
+  push:
+    branches: [main]
+    paths-ignore: &unbuilt
+      - "**.md"
+      - "docs/**"
+      - "LICENSE"
+      - "THIRD_PARTY_NOTICES"
+      - "tools/package-*"
+      - ".github/workflows/release.yml"
+  pull_request:
+    paths-ignore: *unbuilt
+  workflow_dispatch:
+
+concurrency:
+  group: dotnet-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  fake-x64:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - run: sudo apt-get update && sudo apt-get install -y ninja-build
+
+      - uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: 10.0.x
+
+      - name: Compiler cache
+        uses: hendrikmuhs/ccache-action@v1.2
+        with:
+          key: linux-fake-x86-64-v3
+          max-size: 2G
+
+      # The same portable flags as the linux workflow, for the same ccache reason.
+      - name: Configure
+        run: >-
+          cmake -S . -B build/fake -G Ninja
+          -DCMAKE_BUILD_TYPE=RelWithDebInfo -DECHOIR_FAKE_BACKEND=ON -DBUILD_TESTING=OFF
+          -DGGML_NATIVE=OFF -DGGML_AVX=ON -DGGML_AVX2=ON -DGGML_FMA=ON -DGGML_F16C=ON -DGGML_BMI2=ON
+          -DCMAKE_C_COMPILER_LAUNCHER=ccache -DCMAKE_CXX_COMPILER_LAUNCHER=ccache
+
+      - name: Build
+        run: cmake --build build/fake
+
+      - name: Compiler cache stats
+        run: ccache -s
+
+      - name: Test
+        env:
+          ECHOIR_NATIVE_DIR: ${{ github.workspace }}/build/fake/bin
+          LD_LIBRARY_PATH: ${{ github.workspace }}/build/fake/bin
+        run: dotnet test bindings/csharp/Echoir.Core.Tests -c Release --filter "TestCategory!=real"
