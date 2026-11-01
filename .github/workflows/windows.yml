@@ -26,10 +26,37 @@ concurrency:
 env:
   VULKAN_VERSION: 1.4.321.1
 
+# The cpu-x64 job runs in four shards on separate runners, so the e2e cases run in parallel. Each
+# shard builds the same tree (ccache makes that cheap) and runs one part of the tests. The shards
+# are the non-e2e tests, the Whisper e2e cases, and the Qwen e2e cases split by policy. On pull
+# requests a shard also leaves out the cases that repeat another one: the voa clip (ep345 covers
+# the long-clip path) and the ep180 stdin pair (the same clip as ep180 stream, through stdin). Pushes
+# to main run every case.
 jobs:
   cpu-x64:
+    name: cpu-x64 (${{ matrix.shard }})
     runs-on: windows-latest
     timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - shard: core
+            include: '.'
+            exclude: '^e2e\.'
+            pr_exclude: ''
+          - shard: e2e-whisper
+            include: '^e2e\.whisper_'
+            exclude: '^$'
+            pr_exclude: 'voa'
+          - shard: e2e-qwen-rollback
+            include: '^e2e\.qwen_.*rollback'
+            exclude: '^$'
+            pr_exclude: 'voa'
+          - shard: e2e-qwen
+            include: '^e2e\.qwen_'
+            exclude: 'rollback'
+            pr_exclude: 'ep180_stdin'
     steps:
       - uses: actions/checkout@v4
         with:
@@ -85,13 +112,16 @@ jobs:
 
       # -V prints every test's output, so the doctest summary and the SKIP lines are visible.
       - name: Test
-        run: ctest --preset windows-cpu-x64 -V
+        env:
+          CTEST_INCLUDE: ${{ matrix.include }}
+          CTEST_EXCLUDE: ${{ matrix.exclude }}${{ github.event_name == 'pull_request' && matrix.pr_exclude != '' && format('|{0}', matrix.pr_exclude) || '' }}
+        run: ctest --preset windows-cpu-x64 -V -R "$env:CTEST_INCLUDE" -E "$env:CTEST_EXCLUDE"
 
       - name: Upload test log
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: windows-cpu-x64-testlog
+          name: windows-cpu-x64-${{ matrix.shard }}-testlog
           path: build/windows-cpu-x64/Testing/Temporary/LastTest.log
           if-no-files-found: ignore
 

@@ -23,10 +23,33 @@ concurrency:
   group: linux-${{ github.ref }}
   cancel-in-progress: true
 
+# The cpu-x64 job runs in four shards on separate runners, the same split and the same pull-request
+# exclusions as windows.yml.
 jobs:
   cpu-x64:
+    name: cpu-x64 (${{ matrix.shard }})
     runs-on: ubuntu-24.04
     timeout-minutes: 60
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - shard: core
+            include: '.'
+            exclude: '^e2e\.'
+            pr_exclude: ''
+          - shard: e2e-whisper
+            include: '^e2e\.whisper_'
+            exclude: '^$'
+            pr_exclude: 'voa'
+          - shard: e2e-qwen-rollback
+            include: '^e2e\.qwen_.*rollback'
+            exclude: '^$'
+            pr_exclude: 'voa'
+          - shard: e2e-qwen
+            include: '^e2e\.qwen_'
+            exclude: 'rollback'
+            pr_exclude: 'ep180_stdin'
     steps:
       - uses: actions/checkout@v4
         with:
@@ -80,12 +103,15 @@ jobs:
 
       # -V prints every test's output, so the doctest summary and the SKIP lines are visible.
       - name: Test
-        run: ctest --preset linux-cpu -V
+        env:
+          CTEST_INCLUDE: ${{ matrix.include }}
+          CTEST_EXCLUDE: ${{ matrix.exclude }}${{ github.event_name == 'pull_request' && matrix.pr_exclude != '' && format('|{0}', matrix.pr_exclude) || '' }}
+        run: ctest --preset linux-cpu -V -R "$CTEST_INCLUDE" -E "$CTEST_EXCLUDE"
 
       - name: Upload test log
         if: failure()
         uses: actions/upload-artifact@v4
         with:
-          name: linux-cpu-testlog
+          name: linux-cpu-${{ matrix.shard }}-testlog
           path: build/linux-cpu/Testing/Temporary/LastTest.log
           if-no-files-found: ignore
