@@ -80,6 +80,15 @@ build/macos-cpu/bin/echoir bench tests/fixtures/pd_nasa_ep180.wav \
   --ref tests/fixtures/pd_nasa_ep180.ref.txt --no-gpu
 ```
 
+With `--stream`, each model runs through a streaming session, and the audio is pushed at its own
+speed, as live capture would deliver it. The table then shows the first partial and the final
+latency of the segments, at the 50th and 95th percentile, in ms. A latency runs from the moment the
+audio up to the text's end reached the session to the moment the text was delivered. A final's
+latency therefore includes the time the segment took to end. `--policy agreement|rollback` picks the
+stabilization policy, and the default is the backend's. The rate of the streamed transcript is
+scored as in `transcribe --stream`. The RTF column is the mean speed that the session reports in its
+stats events, or `-` when a run sent none.
+
 `echoir score` compares a transcript with a reference text. Both are UTF-8 files, and `-` reads
 standard input. It prints one JSON line, `{"rate":…,"subs":…,"dels":…,"ins":…,"ref_len":…}`, where
 the rate is `(subs + dels + ins) / ref_len`. `--normalize` prints the normalized text of one file

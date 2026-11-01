@@ -2,7 +2,10 @@
 // events reach the sink as they are produced.
 #pragma once
 
+#include <chrono>
+#include <cstdint>
 #include <filesystem>
+#include <functional>
 #include <vector>
 
 #include "options.h"
@@ -27,6 +30,12 @@ using StreamSink = SessionSink;
 // speed of the audio, as live capture would deliver them.
 enum class Pace { none, realtime };
 
+// Called after each chunk of a file or standard input is pushed, with the audio time at the end of
+// the chunk, in ms from the start of the input, and the wall-clock time of the push. It runs on the
+// calling thread. Capture devices do not call it.
+using PushObserver =
+    std::function<void(std::int64_t audio_end_ms, std::chrono::steady_clock::time_point pushed)>;
+
 // Pushes the input chunk_ms at a time. The session is flushed at the end, which finalizes the
 // segment that was still open. A file, or raw samples on standard input, is decoded as it is
 // pushed. A WAV on standard input is read whole first. A capture device (mic or loopback) runs
@@ -34,7 +43,7 @@ enum class Pace { none, realtime };
 // does not apply to it. Throws std::exception when a model, the input or a decode fails. Before it
 // throws, the sink receives an ERROR event, unless the session has already sent one.
 void transcribe_stream(const TranscribeOptions& options, int chunk_ms, Pace pace,
-                       const std::vector<std::filesystem::path>& model_dirs,
-                       const StreamSink& sink);
+                       const std::vector<std::filesystem::path>& model_dirs, const StreamSink& sink,
+                       const PushObserver& on_push = {});
 
 }  // namespace echoir::cli

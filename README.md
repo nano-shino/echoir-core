@@ -182,7 +182,8 @@ the Python standard library only and runs on any host.
 
 - `transcribe` transcribes a WAV file, standard input or a microphone, either whole (`--offline`)
   or through a streaming session (`--stream`).
-- `bench` transcribes one file with several models and scores each transcript.
+- `bench` transcribes one file with several models and scores each transcript. With `--stream`, it
+  also pushes the audio at its own speed and reports the first partial and the final latency.
 - `score` scores a transcript against a reference text.
 - `devices` lists the capture devices, and `models` shows the model registry.
 - `serve --stdio` runs a JSON-lines service for a host process.

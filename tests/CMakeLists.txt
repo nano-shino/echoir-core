@@ -175,6 +175,10 @@ if(TARGET echoir_cli)
       PASS_REGULAR_EXPRESSION "the rollback policy is not supported by the whisper backend"
       SKIP_REGULAR_EXPRESSION "fetch-models")
   endif()
+  # The stabilization policy of a benchmark is a streaming option too.
+  add_usage_test(cli_bench_policy_needs_stream
+    "bench|${JFK}|--ref|${JFK}|--policy|rollback"
+    "--policy requires --stream")
   # The minimum chunk is a streaming option as well, and it is a usage error without --stream.
   add_usage_test(cli_min_chunk_ms_needs_stream
     "transcribe|${JFK}|--model|whisper-tiny-en|--offline|--min-chunk-ms|1000"
@@ -223,6 +227,17 @@ if(TARGET echoir_cli)
       "BlackHole")
   endif()
 
+  # bench --stream runs the model at the audio's pace and prints its row with the latency columns.
+  # Skipped when the model is not fetched.
+  if(NOT ECHOIR_FAKE_BACKEND)
+    add_test(NAME bench_stream COMMAND echoir_cli bench
+      "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/jfk.wav" --ref "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/jfk.ref.txt"
+      --backend whisper --stream)
+    set_tests_properties(bench_stream PROPERTIES LABELS e2e
+      PASS_REGULAR_EXPRESSION "whisper-tiny-en +default +0\\.0000 "
+      SKIP_REGULAR_EXPRESSION "fetch-models")
+  endif()
+
   # An id that is not in the registry is a usage error. The registry is read from the source tree,
   # so the test needs no model files.
   add_usage_test(cli_models_path_unknown_id "models|path|no-such-id"
@@ -248,6 +263,18 @@ if(TARGET echoir_cli_lib)
 
   add_test(NAME serve COMMAND echoir_serve_tests)
   set_tests_properties(serve PROPERTIES LABELS unit)
+
+  # The pure helpers of the command code: percentiles, the latency of streamed text, and the JSON
+  # line of a stats event.
+  add_executable(echoir_cli_tests
+    "${CMAKE_CURRENT_SOURCE_DIR}/cli/test_latency.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/cli/test_event_json.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/unit/test_main.cpp")
+  target_link_libraries(echoir_cli_tests PRIVATE
+    echoir_cli_lib echoir_options echoir_single Threads::Threads)
+
+  add_test(NAME cli_unit COMMAND echoir_cli_tests)
+  set_tests_properties(cli_unit PROPERTIES LABELS unit)
 endif()
 
 # Sessions on the scripted backend and VAD. Only the ECHOIR_FAKE_BACKEND build has them.

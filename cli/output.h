@@ -17,7 +17,8 @@ enum class OutputFormat { Text, Jsonl, Srt };
 OutputFormat parse_format(const std::string& name);
 
 // The JSON object of an event, on one line with no line break, as jsonl prints it and as the
-// stdio service sends it. Empty for the stats kind, which this version never sends.
+// stdio service sends it. Empty when the event has no line: a stats event whose detail is not a
+// JSON object.
 std::string event_json(const echoir::SessionEvent& event);
 
 // Whether the stream is an interactive terminal, so the partial text can be redrawn in place.

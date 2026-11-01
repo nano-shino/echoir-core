@@ -176,7 +176,14 @@ audio arrives after that. Send `stop` to end the session:
 Times are milliseconds from the start of the session, or from the last `reset`. Segment ids start at
 1 in a session and never repeat, so a `partial` and its `final` share an id.
 
-`stats` is reserved for latency measurements. The service never sends it.
+**`stats`** reports the speed of the decoding. It is sent after every 10 ticks that decode audio,
+and it covers those ticks. `rtf` is their decode time over their audio time. `decode_ms` and
+`window_ms` are the mean decode time and the mean length of the audio decoded per tick, in ms.
+`backend` names the backend. A stats event has no `id`, `start_ms`, `end_ms` or `text`:
+
+```json
+{"type":"stats","rtf":0.12,"decode_ms":180,"window_ms":2600,"backend":"qwen3-asr"}
+```
 
 ## Replies
 

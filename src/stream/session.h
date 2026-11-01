@@ -45,10 +45,14 @@
 #include "backends/asr_backend.h"
 #include "echoir/echoir.h"
 #include "stream/audio_store.h"
+#include "stream/tick_stats.h"
 #include "text/stabilizer.h"
 #include "vad/vad.h"
 
 namespace echoir {
+
+// The number of ticks that decode audio between two STATS events in the C ABI and the CLI.
+inline constexpr int kStatsEveryTicks = 10;
 
 // How the text of the ongoing segment is stabilized. See session.cpp.
 enum class StreamPolicy {
@@ -73,17 +77,21 @@ struct SessionConfig {
     int rollback_tokens = 5;
     // How much of the newest audio is kept for read_audio(). 0 keeps none.
     std::int64_t retain_audio_ms = 0;
+    // A STATS event is sent after every this many ticks that decode audio. 0 sends none. The C ABI
+    // and the CLI pass kStatsEveryTicks.
+    int stats_every_ticks = 0;
 };
 
 // One event. Times are milliseconds from the start of the session or from the last reset. The
-// strings are valid only during the sink call.
+// strings are valid only during the sink call. A STATS event has no times or text: its detail is
+// a JSON object with the speed of the ticks since the previous STATS event (see stats_json).
 struct SessionEvent {
     echoir_event_type type = ECHOIR_EVENT_FINAL;
     std::int64_t segment_id = 0;  // a PARTIAL and the FINAL that replaces it share this id
     std::int64_t start_ms = 0;
     std::int64_t end_ms = 0;
     std::string text;    // PARTIAL and FINAL, UTF-8; empty for other kinds
-    std::string detail;  // ERROR: the message
+    std::string detail;  // ERROR: the message. STATS: the JSON object
 };
 
 // Receives the events in order. It runs on the thread that drives the session (see the threading
@@ -258,6 +266,8 @@ private:
     Mode mode_ = Mode::unset;          // decode_mu_
     // decode_mu_: bumped by stop(). A worker tick from an older run does nothing.
     std::uint64_t run_generation_ = 0;
+
+    TickStats stats_;  // decode_mu_: ticks since the last STATS event
 
     std::thread worker_;           // lifecycle_mu_
     bool worker_running_ = false;  // worker_mu_

@@ -109,7 +109,9 @@ typedef struct {
 //   FINAL    text of a finished segment.
 //   CLEARED  the transcript was cleared by echoir_session_clear(). Drop what is shown.
 //   ERROR    a failure while streaming. detail holds the message.
-//   STATS    reserved. This version never sends it. When it is sent, detail holds a JSON object.
+//   STATS    speed of the recent ticks, after every 10 ticks that decode audio. detail holds a JSON
+//            object: {"rtf","decode_ms","window_ms","backend"}. rtf is decode time over audio time;
+//            decode_ms and window_ms are the mean per tick. start_ms and end_ms are 0.
 typedef enum { ECHOIR_EVENT_PARTIAL = 1, ECHOIR_EVENT_FINAL = 2, ECHOIR_EVENT_CLEARED = 3,
                ECHOIR_EVENT_ERROR = 4, ECHOIR_EVENT_STATS = 5 } echoir_event_type;
 
@@ -120,7 +122,7 @@ typedef struct {
   int64_t     start_ms, end_ms;        // milliseconds since session start or the last reset
   const char* text;                    // UTF-8. Valid only during the callback, or until the next
                                        // poll or free in queue mode.
-  const char* detail;                  // ERROR message; NULL otherwise
+  const char* detail;                  // ERROR message, or STATS JSON object; NULL otherwise
 } echoir_event;
 
 // Event callback, given to echoir_session_create(). It runs on the thread that drives the
