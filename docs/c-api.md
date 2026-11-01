@@ -459,8 +459,9 @@ decoder keeps up it stays near `min_chunk_ms` plus one decode, rising during eac
 when it ends. When it grows steadily, the decoder is slower than real time. The call never waits for a
 decode, so it can be polled for a display.
 
-Set `struct_size` to `sizeof(echoir_lag)` first; a later version writes only the fields that fit it.
-It returns `ECHOIR_ERR_INVALID_ARG` for a NULL `out` or a `struct_size` below this version's struct.
+Set `struct_size` to `sizeof(echoir_lag)` first. A newer library writes only the fields that fit it;
+an older one fills the fields it knows and zeroes the rest. It returns `ECHOIR_ERR_INVALID_ARG` for a
+NULL `out` or a `struct_size` that does not reach `tick_ms`.
 
 ### Capture
 
@@ -569,15 +570,17 @@ The `detail` of a STATS event is a JSON object:
 
 ```json
 {"rtf":0.12,"decode_ms":180,"window_ms":2600,"ticks":10,"new_ms":1000,"speech_ms":800,
- "decode_max_ms":400,"load":0.18,"speech_load":0.2,"backend":"qwen3-asr"}
+ "decode_max_ms":400,"load":0.18,"speech_rtf":0.2,"backend":"qwen3-asr"}
 ```
 
 `rtf` is the decode time over the audio time of the windows, carried audio included. `decode_ms` and
 `window_ms` are the mean decode time and the mean length of the audio decoded per tick, in ms. `ticks`
 is the number of ticks covered, `new_ms` the mean audio a tick took in, `speech_ms` the mean length of
 the speech it decoded, and `decode_max_ms` the slowest tick. `load` is the decode time over the new
-audio: at 1 or more the session cannot keep up. `speech_load` is the same over the ticks that decoded
-speech, and 0 when none did. `backend` names the backend.
+audio, the share of real time the decoder is busy. Once a decode takes longer than `min_chunk_ms`,
+ticks run back to back and `load` stays near 1 even while the session keeps up; use
+`echoir_session_read_lag()` to tell whether the backlog grows. `speech_rtf` is the `rtf` over the
+ticks that decoded speech, and 0 when none did. `backend` names the backend.
 
 `detail` is NULL for every event type except ERROR and STATS.
 

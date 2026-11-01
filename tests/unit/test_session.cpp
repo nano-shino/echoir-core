@@ -1144,7 +1144,7 @@ TEST_CASE("session: a STATS event follows every N ticks that decode audio") {
     CHECK(stats[1]["new_ms"] == 1000);
     CHECK(stats[1]["speech_ms"] == 0);
     CHECK(stats[1]["load"].get<double>() >= 0.0);
-    CHECK(stats[1]["speech_load"].get<double>() == 0.0);
+    CHECK(stats[1]["speech_rtf"].get<double>() == 0.0);
 }
 
 TEST_CASE("session: STATS counts the speech ranges a tick decodes") {

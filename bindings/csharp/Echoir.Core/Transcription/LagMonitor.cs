@@ -27,7 +27,12 @@ public sealed class LagMonitor
     // A worse state is shown at least this long, so the display does not flicker.
     private const int HoldMs = 2000;
 
+    private const int SecondMs = 1000;
+
     private readonly Queue<(long AtMs, long BacklogMs)> _samples = new();
+    private readonly List<long> _secondPeaks = new();
+    private long _secondStartMs = long.MinValue;
+    private long _secondPeakMs;
     private readonly int _floorMs;
     private LagState _state = LagState.Live;
     private long _heldUntilMs;
@@ -45,6 +50,27 @@ public sealed class LagMonitor
 
     // The largest backlog seen.
     public TimeSpan MaxBacklog { get; private set; }
+
+    // The 90th percentile of the backlog peak of each second so far: how far behind the captions
+    // were for most of the run, with a short busy spell left out. Zero before the first reading.
+    public TimeSpan TypicalBacklog
+    {
+        get
+        {
+            var peaks = new List<long>(_secondPeaks);
+            if (_secondStartMs != long.MinValue)
+            {
+                peaks.Add(_secondPeakMs);
+            }
+            if (peaks.Count == 0)
+            {
+                return TimeSpan.Zero;
+            }
+            peaks.Sort();
+            int index = Math.Clamp((int)Math.Ceiling(0.9 * peaks.Count) - 1, 0, peaks.Count - 1);
+            return TimeSpan.FromMilliseconds(peaks[index]);
+        }
+    }
 
     // The share of the time between the first and the last reading spent Behind.
     public double BehindShare => _runMs > 0 ? (double)_behindMs / _runMs : 0;
@@ -72,6 +98,19 @@ public sealed class LagMonitor
         if (backlogMs > MaxBacklog.TotalMilliseconds)
         {
             MaxBacklog = TimeSpan.FromMilliseconds(backlogMs);
+        }
+        if (_secondStartMs == long.MinValue || atMs >= _secondStartMs + SecondMs)
+        {
+            if (_secondStartMs != long.MinValue)
+            {
+                _secondPeaks.Add(_secondPeakMs);
+            }
+            _secondStartMs = atMs;
+            _secondPeakMs = backlogMs;
+        }
+        else
+        {
+            _secondPeakMs = Math.Max(_secondPeakMs, backlogMs);
         }
 
         long peak = 0;

@@ -258,6 +258,22 @@ TEST_CASE("fake build: read_lag reports the audio not yet decoded") {
     CHECK(lag.decoded_ms == 1000);
     CHECK(lag.backlog_ms == 0);
 
+    // A host built against the first version (struct_size up to tick_ms) keeps working, and a host
+    // built against a later, larger struct gets the fields this version does not know zeroed.
+    struct {
+        echoir_lag known;
+        int64_t later;
+    } larger{};
+    larger.known.struct_size = sizeof(larger);
+    larger.later = 7;
+    REQUIRE(echoir_session_read_lag(session, &larger.known) == ECHOIR_OK);
+    CHECK(larger.known.head_ms == 1000);
+    CHECK(larger.later == 0);
+    lag.struct_size = offsetof(echoir_lag, tick_ms) + sizeof(lag.tick_ms);
+    CHECK(echoir_session_read_lag(session, &lag) == ECHOIR_OK);
+    lag.struct_size = offsetof(echoir_lag, tick_ms);
+    CHECK(echoir_session_read_lag(session, &lag) == ECHOIR_ERR_INVALID_ARG);
+
     echoir_session_free(session);
     echoir_engine_free(engine);
 }

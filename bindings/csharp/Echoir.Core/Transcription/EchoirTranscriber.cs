@@ -48,7 +48,7 @@ public sealed class EchoirTranscriber : IDisposable, IAsyncDisposable
     // The lag and speed of the current or last run. Written under _native, and read under
     // _speedGate alone, so the UI never waits on a session call.
     private readonly object _speedGate = new();
-    private readonly List<double> _speechLoads = new();
+    private readonly List<double> _speechRtfs = new();
     private LagMonitor? _lagMonitor;
     private TranscriberStats? _lastStats;
     private string _backend = string.Empty;
@@ -104,15 +104,15 @@ public sealed class EchoirTranscriber : IDisposable, IAsyncDisposable
                     return null;
                 }
                 long end = _running ? Environment.TickCount64 : _runEndedMs;
-                double[] loads = _speechLoads.Order().ToArray();
+                double[] rtfs = _speechRtfs.Order().ToArray();
                 return new RunSpeed
                 {
                     Backend = _backend,
                     Duration = TimeSpan.FromMilliseconds(Math.Max(0, end - _runStartedMs)),
                     Speech = TimeSpan.FromMilliseconds(_speechMs),
-                    SpeechLoadMedian = Percentile(loads, 0.5),
-                    SpeechLoadP95 = Percentile(loads, 0.95),
-                    Samples = loads.Length,
+                    SpeechRtfMedian = Percentile(rtfs, 0.5),
+                    Samples = rtfs.Length,
+                    TypicalBacklog = _lagMonitor.TypicalBacklog,
                     MaxBacklog = _lagMonitor.MaxBacklog,
                     BehindShare = _lagMonitor.BehindShare,
                 };
@@ -304,7 +304,7 @@ public sealed class EchoirTranscriber : IDisposable, IAsyncDisposable
             lock (_speedGate)
             {
                 _lagMonitor = new LagMonitor(options.MinChunkMs);
-                _speechLoads.Clear();
+                _speechRtfs.Clear();
                 _lastStats = null;
                 _backend = string.Empty;
                 _speechMs = 0;
@@ -620,7 +620,7 @@ public sealed class EchoirTranscriber : IDisposable, IAsyncDisposable
             }
             if (stats.SpeechMs > 0)
             {
-                _speechLoads.Add(stats.SpeechLoad);
+                _speechRtfs.Add(stats.SpeechRtf);
                 _speechMs += (double)stats.SpeechMs * Math.Max(1, stats.Ticks);
             }
         }

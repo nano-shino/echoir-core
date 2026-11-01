@@ -41,7 +41,7 @@ public sealed class LagMonitorTests
     public void GrowingBacklogIsBehindBeforeItIsLarge()
     {
         var monitor = new LagMonitor(MinChunkMs);
-        // A load of 1.2: the backlog gains 0.2 s per second, from 0.5 s.
+        // Decoding 1.2 times slower than the audio: the backlog gains 0.2 s per second, from 0.5 s.
         TranscriberLag lag = Feed(monitor, 0, 8000, t => 500 + t / 5);
         Assert.AreEqual(LagState.Behind, lag.State);
         Assert.IsTrue(lag.Trend > 0.15 && lag.Trend < 0.25, $"Trend {lag.Trend}.");
@@ -62,14 +62,32 @@ public sealed class LagMonitorTests
     }
 
     [TestMethod]
+    public void TypicalBacklogLeavesOutAShortSpike()
+    {
+        var monitor = new LagMonitor(MinChunkMs);
+        Assert.AreEqual(TimeSpan.Zero, monitor.TypicalBacklog);
+        // 30 s of a healthy sawtooth up to 0.9 s, with a 2 s spike to 8 s in the middle.
+        Feed(monitor, 0, 14_000, t => 400 + t % 500);
+        Feed(monitor, 14_000, 16_000, _ => 8000);
+        Feed(monitor, 16_000, 30_000, t => 400 + t % 500);
+        Assert.AreEqual(TimeSpan.FromMilliseconds(8000), monitor.MaxBacklog);
+        Assert.IsTrue(monitor.TypicalBacklog < TimeSpan.FromSeconds(1), $"Typical {monitor.TypicalBacklog}.");
+
+        // A backlog that stays high for most of the run is typical.
+        var slow = new LagMonitor(MinChunkMs);
+        Feed(slow, 0, 30_000, _ => 5000);
+        Assert.AreEqual(TimeSpan.FromMilliseconds(5000), slow.TypicalBacklog);
+    }
+
+    [TestMethod]
     public void StatsParseReadsEveryField()
     {
         TranscriberStats? stats = TranscriberStats.Parse(
-            """{"rtf":0.12,"decode_ms":180,"window_ms":2600,"ticks":10,"new_ms":1000,"speech_ms":800,"decode_max_ms":400,"load":0.18,"speech_load":0.2,"backend":"qwen3-asr"}""");
+            """{"rtf":0.12,"decode_ms":180,"window_ms":2600,"ticks":10,"new_ms":1000,"speech_ms":800,"decode_max_ms":400,"load":0.18,"speech_rtf":0.2,"backend":"qwen3-asr"}""");
         Assert.IsNotNull(stats);
         Assert.AreEqual(0.12, stats.Rtf, 1e-9);
         Assert.AreEqual(0.18, stats.Load, 1e-9);
-        Assert.AreEqual(0.2, stats.SpeechLoad, 1e-9);
+        Assert.AreEqual(0.2, stats.SpeechRtf, 1e-9);
         Assert.AreEqual(10, stats.Ticks);
         Assert.AreEqual(180, stats.DecodeMs);
         Assert.AreEqual(2600, stats.WindowMs);

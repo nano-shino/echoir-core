@@ -24,7 +24,7 @@ public enum LagState
 //   Backlog: the largest backlog of the last two seconds, so how far behind the captions may be.
 //   Current: the backlog now. It rises during each decode and drops when the decode ends.
 //   Trend: backlog gained per second of real time over the last ten seconds. Near 0 while the
-//     decoder keeps up; with a load above 1 it approaches load - 1.
+//     decoder keeps up; positive while it decodes slower than the audio arrives.
 //   TickRunning: how long the decode in progress has run; zero between decodes.
 public readonly record struct TranscriberLag(
     LagState State,
@@ -40,16 +40,18 @@ public readonly record struct TranscriberLag(
 // The speed of the decoding over a run of ticks, from one STATS event of the core.
 public sealed record TranscriberStats
 {
-    // Decode time over the audio of the windows, carried audio included.
+    // Decode time over the audio of the windows, carried audio included: how fast the model
+    // decodes. 1 / Rtf is how many times faster than real time.
     public double Rtf { get; init; }
 
-    // Decode time over the new audio: the share of real time the decoder is busy. At 1 or more the
-    // session cannot keep up.
+    // Decode time over the new audio: the share of real time the decoder is busy. Once a decode
+    // takes longer than MinChunkMs the ticks run back to back and this stays near 1 whether or not
+    // the session keeps up; EchoirTranscriber.Lag says that.
     public double Load { get; init; }
 
-    // The load over the ticks that decoded speech only; 0 when none did. Silence is cheap to
-    // decode, so this is the figure that says whether a model keeps up with continuous speech.
-    public double SpeechLoad { get; init; }
+    // The Rtf over the ticks that decoded speech only; 0 when none did. Silence is cheap to decode,
+    // so this is the speed of a model on speech.
+    public double SpeechRtf { get; init; }
 
     public int Ticks { get; init; }
 
@@ -83,7 +85,7 @@ public sealed record TranscriberStats
             {
                 Rtf = Number(root, "rtf"),
                 Load = Number(root, "load"),
-                SpeechLoad = Number(root, "speech_load"),
+                SpeechRtf = Number(root, "speech_rtf"),
                 Ticks = (int)Number(root, "ticks"),
                 DecodeMs = (int)Number(root, "decode_ms"),
                 WindowMs = (int)Number(root, "window_ms"),
@@ -103,7 +105,7 @@ public sealed record TranscriberStats
 
     public override string ToString() => string.Create(
         CultureInfo.InvariantCulture,
-        $"load {Load:0.00} (speech {SpeechLoad:0.00}), rtf {Rtf:0.000}, decode {DecodeMs} ms (max {DecodeMaxMs}), window {WindowMs} ms");
+        $"rtf {Rtf:0.000} (speech {SpeechRtf:0.000}), load {Load:0.00}, decode {DecodeMs} ms (max {DecodeMaxMs}), window {WindowMs} ms");
 
     private static double Number(JsonElement root, string name)
     {
@@ -125,14 +127,17 @@ public sealed record RunSpeed
     // The speech the ticks decoded. Audio carried into later ticks counts again with each decode.
     public TimeSpan Speech { get; init; }
 
-    // The median and the 95th percentile of the speech load over the STATS events that saw speech.
-    // Zero when none did.
-    public double SpeechLoadMedian { get; init; }
+    // The median of the speech rtf over the STATS events that saw speech: how fast the model
+    // decodes speech. Zero when none did.
+    public double SpeechRtfMedian { get; init; }
 
-    public double SpeechLoadP95 { get; init; }
-
-    // The number of STATS events the percentiles come from.
+    // The number of STATS events the median comes from.
     public int Samples { get; init; }
+
+    // How far the captions trailed the audio for most of the run: the 90th percentile of the
+    // backlog peak of each second (LagMonitor.TypicalBacklog). A busy second or two on the
+    // machine does not move it.
+    public TimeSpan TypicalBacklog { get; init; }
 
     public TimeSpan MaxBacklog { get; init; }
 

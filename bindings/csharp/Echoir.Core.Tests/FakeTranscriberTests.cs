@@ -222,7 +222,8 @@ public sealed class FakeTranscriberTests
         Assert.IsTrue(speed.Samples >= 1);
         Assert.IsTrue(speed.Speech > TimeSpan.Zero);
         Assert.IsTrue(speed.Duration >= TimeSpan.FromSeconds(3), $"Duration {speed.Duration}.");
-        Assert.IsTrue(speed.SpeechLoadP95 >= speed.SpeechLoadMedian);
+        Assert.IsTrue(speed.TypicalBacklog > TimeSpan.Zero && speed.TypicalBacklog <= speed.MaxBacklog,
+            $"Typical {speed.TypicalBacklog}, max {speed.MaxBacklog}.");
         Assert.AreEqual(0, speed.BehindShare);
 
         // The summary of the stopped run stays until the next Start, which starts a new one.

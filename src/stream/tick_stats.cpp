@@ -24,7 +24,7 @@ void TickStats::add(double decode_ms, double window_ms, double new_ms, double sp
     decode_max_ms_ = std::max(decode_max_ms_, decode_ms);
     if (speech_ms > 0.0) {
         speech_decode_ms_ += decode_ms;
-        speech_new_ms_ += new_ms;
+        speech_window_ms_ += window_ms;
     }
 }
 
@@ -39,7 +39,7 @@ TickSummary TickStats::summary() const {
     out.speech_ms = round_ms(speech_ms_ / count);
     out.decode_max_ms = round_ms(decode_max_ms_);
     out.load = new_ms_ > 0.0 ? decode_ms_ / new_ms_ : 0.0;
-    out.speech_load = speech_new_ms_ > 0.0 ? speech_decode_ms_ / speech_new_ms_ : 0.0;
+    out.speech_rtf = speech_window_ms_ > 0.0 ? speech_decode_ms_ / speech_window_ms_ : 0.0;
     return out;
 }
 
@@ -54,7 +54,7 @@ std::string stats_json(const TickSummary& summary, const std::string& backend) {
                                          {"speech_ms", summary.speech_ms},
                                          {"decode_max_ms", summary.decode_max_ms},
                                          {"load", round4(summary.load)},
-                                         {"speech_load", round4(summary.speech_load)},
+                                         {"speech_rtf", round4(summary.speech_rtf)},
                                          {"backend", backend}};
     return line.dump(-1, ' ', false, nlohmann::ordered_json::error_handler_t::replace);
 }

@@ -20,7 +20,7 @@ TEST_CASE("tick stats: rtf is decode time over window audio, the others are per-
     CHECK(summary.window_ms == 2000);
 }
 
-TEST_CASE("tick stats: load is decode time over new audio, speech load only over speech ticks") {
+TEST_CASE("tick stats: load is decode time over new audio, speech rtf only over speech ticks") {
     TickStats stats;
     // A silent tick: 500 ms new, nothing decoded as speech, 5 ms of VAD.
     stats.add(5.0, 1000.0, 500.0, 0.0);
@@ -33,14 +33,14 @@ TEST_CASE("tick stats: load is decode time over new audio, speech load only over
     CHECK(summary.speech_ms == 1833);
     CHECK(summary.decode_max_ms == 300);
     CHECK(summary.load == doctest::Approx(605.0 / 1500.0));
-    CHECK(summary.speech_load == doctest::Approx(0.6));
+    CHECK(summary.speech_rtf == doctest::Approx(600.0 / 6500.0));
 }
 
-TEST_CASE("tick stats: no new audio or no speech gives load 0") {
+TEST_CASE("tick stats: no new audio or no speech gives load and speech rtf 0") {
     TickStats stats;
     stats.add(20.0, 1000.0, 0.0, 0.0);
     CHECK(stats.summary().load == 0.0);
-    CHECK(stats.summary().speech_load == 0.0);
+    CHECK(stats.summary().speech_rtf == 0.0);
 }
 
 TEST_CASE("tick stats: means round to the nearest millisecond") {
@@ -68,7 +68,7 @@ TEST_CASE("stats json: one object with rtf, decode_ms, window_ms and backend") {
     CHECK(nlohmann::json::parse(text) ==
           nlohmann::json::parse(
               R"({"rtf":0.12,"decode_ms":180,"window_ms":2600,"ticks":10,"new_ms":1000,)"
-              R"("speech_ms":800,"decode_max_ms":400,"load":0.18,"speech_load":0.2,)"
+              R"("speech_ms":800,"decode_max_ms":400,"load":0.18,"speech_rtf":0.2,)"
               R"("backend":"qwen3-asr"})"));
     CHECK(text.find('\n') == std::string::npos);
 }

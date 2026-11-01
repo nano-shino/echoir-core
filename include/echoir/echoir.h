@@ -272,8 +272,9 @@ ECHOIR_API echoir_status  echoir_session_set_input_muted(echoir_session*, int32_
 // backlog_ms is head_ms - decoded_ms: the audio waiting for a tick plus the new audio of the tick
 // that runs. While a session keeps up it stays near min_chunk_ms plus one decode; when it grows
 // steadily, the decoder is slower than real time. Set struct_size to sizeof(echoir_lag) before the
-// call; a later version writes only the fields that fit it. Never waits for a decode. Returns
-// ECHOIR_ERR_INVALID_ARG for out NULL or a struct_size below the size of this version's struct.
+// call. A library older than the header fills the fields it knows and zeroes the rest of
+// struct_size; a newer one writes only the fields that fit. Never waits for a decode. Returns
+// ECHOIR_ERR_INVALID_ARG for out NULL or a struct_size that does not reach tick_ms.
 typedef struct {
   uint32_t struct_size;  // sizeof(echoir_lag), set by the caller
   int64_t  head_ms;      // audio taken in

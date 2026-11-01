@@ -70,9 +70,9 @@
 // shown, so the host replaces the PARTIAL. An empty FINAL is sent only to retract a shown PARTIAL.
 // Stats. With stats_every_ticks set, a STATS event follows the events of every N-th tick that
 // decodes audio. It covers the N ticks: the decode time over the window audio (rtf), and the mean
-// decode time and window length per tick. It also has the load: the decode time over the new
-// audio the ticks took in, which reaches 1 when the session can no longer keep up, and the same
-// over the ticks that decoded speech. lag() reports how much audio waits, at any time.
+// decode time and window length per tick, the rtf of the ticks that decoded speech, and the load:
+// the decode time over the new audio the ticks took in. Once ticks run back to back the load stays
+// near 1 whether or not the session keeps up; lag() tells, by how much audio waits, at any time.
 //
 // Stabilizing the ongoing text, agreement policy (text::Stabilizer). Each decode of the ongoing
 // segment goes into its history, and the text shown is built in three steps:
