@@ -420,9 +420,10 @@ echoir_status echoir_session_read_peaks(echoir_session* session, int64_t start_m
                                         size_t* n_buckets);
 ```
 
-Writes the level envelope of `[start_ms, end_ms)`. Each bucket is `bucket_ms` long, and it has a
-min and a max value at full scale ±1. `bucket_ms` must be a positive multiple of 10. The envelope keeps
-one pair per 10 ms for the whole session, whatever `retain_audio_ms` is.
+Writes the level envelope of `[start_ms, end_ms)`. Each bucket has a min and a max value at full
+scale ±1. The envelope keeps one min/max pair per 10 ms cell for the whole session, whatever
+`retain_audio_ms` is. A bucket is `bucket_ms` of audio, and `bucket_ms` must be a positive multiple of
+10, so a bucket spans whole cells.
 
 `out_minmax` holds two floats per bucket, the min and then the max. It has room for `cap` buckets, and
 `*n_buckets` is set to the number written. `end_ms` is clamped to the newest whole 10 ms, and the last
