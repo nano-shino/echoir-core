@@ -3,11 +3,12 @@
 // session instead. A `-` input reads standard input: a WAV, or raw samples when `--pcm`, `--rate`
 // and `--channels` describe them. `--input mic` and `--input loopback` capture live audio
 // from a device, and run until Ctrl-C or `--duration`. `echoir bench` scores several models on one
-// file, and `echoir score` scores a transcript. `echoir models list` shows the registry's models
-// and whether they are on disk, and `echoir models path ID` prints where a model's files are.
-// `echoir devices` lists the capture and loopback devices. `echoir serve --stdio` reads JSON
-// commands on standard input and writes events and replies on standard output
-// (docs/protocol.md). Usage errors exit with 2, and a failure while running exits with 1.
+// file. With --stream it also measures the latency of the streamed text. `echoir score` scores a
+// transcript. `echoir models list` shows the registry's models and whether they are on disk, and
+// `echoir models path ID` prints where a model's files are. `echoir devices` lists the capture and
+// loopback devices. `echoir serve --stdio` reads JSON commands on standard input and writes events
+// and replies on standard output (docs/protocol.md). Usage errors exit with 2, and a failure while
+// running exits with 1.
 #include <cstdint>
 #include <cstdio>
 #include <exception>
@@ -218,6 +219,16 @@ int run(int argc, const CharT* const* argv, const char* argv0) {
         ->check(CLI::IsMember({"whisper", "qwen", "all"}))
         ->capture_default_str();
     bench_cmd->add_option("--model", bench.model, "a registry id: runs only that model");
+    CLI::Option* bench_stream_flag = bench_cmd->add_flag(
+        "--stream", bench.stream,
+        "run each model through a streaming session, pushing the audio at its own speed, and "
+        "report the first partial and the final latency");
+    bench_cmd
+        ->add_option("--policy", bench.policy,
+                     "with --stream: how the ongoing text is stabilized, agreement or rollback "
+                     "(default: the backend's; rollback skips Whisper)")
+        ->check(CLI::IsMember({"agreement", "rollback"}))
+        ->needs(bench_stream_flag);
     add_run_options(bench_cmd, bench.run, models_dir);
 
     CLI::App* devices_cmd = app.add_subcommand(

@@ -144,7 +144,8 @@ void run_capture(const TranscribeOptions& o, const std::vector<fs::path>& model_
 // before any model loads. A bad model fails before any audio is decoded. A capture device is
 // handled by run_capture.
 void run_stream(const TranscribeOptions& o, int chunk_ms, Pace pace,
-                const std::vector<fs::path>& model_dirs, const StreamSink& sink) {
+                const std::vector<fs::path>& model_dirs, const StreamSink& sink,
+                const PushObserver& on_push) {
     if (chunk_ms <= 0) {
         throw std::invalid_argument("--chunk-ms must be positive");
     }
@@ -172,10 +173,20 @@ void run_stream(const TranscribeOptions& o, int chunk_ms, Pace pace,
     const std::size_t chunk_frames = frames_in_chunk(rate, chunk_ms);
     const auto rate_i = static_cast<std::int32_t>(rate);
     const auto channels_i = static_cast<std::int32_t>(channels);
+    // Frames pushed so far, which give the audio time of each chunk's end.
+    std::size_t frames_pushed = 0;
+    const auto notify_pushed = [&](std::size_t frames) {
+        if (on_push) {
+            const auto audio_end_ms = static_cast<std::int64_t>(frames * 1000 / rate);
+            on_push(audio_end_ms, std::chrono::steady_clock::now());
+        }
+    };
     if (pace == Pace::none) {
         for (std::span<const float> chunk = source->next(chunk_frames); !chunk.empty();
              chunk = source->next(chunk_frames)) {
             session.push(chunk, rate_i, channels_i);
+            frames_pushed += chunk.size() / channels;
+            notify_pushed(frames_pushed);
             session.process();
         }
         session.flush();
@@ -186,7 +197,6 @@ void run_stream(const TranscribeOptions& o, int chunk_ms, Pace pace,
     // would have been captured, so the session sees audio at the speed of the input.
     session.start();
     const auto origin = std::chrono::steady_clock::now();
-    std::size_t frames_pushed = 0;
     // A failed decode ends the run, as it does with Pace::none, so the rest of the input is not
     // paced through for nothing.
     for (std::span<const float> chunk = source->next(chunk_frames);
@@ -196,6 +206,7 @@ void run_stream(const TranscribeOptions& o, int chunk_ms, Pace pace,
             std::chrono::duration<double>(static_cast<double>(frames_pushed) / rate));
         std::this_thread::sleep_until(origin + captured);
         session.push(chunk, rate_i, channels_i);
+        notify_pushed(frames_pushed);
     }
     session.flush();
     session.stop();
@@ -221,11 +232,13 @@ SessionConfig session_config(const TranscribeOptions& o, const LoadedModels& mod
                                      : StreamPolicy::agreement;
     config.min_chunk_ms = o.min_chunk_ms;
     config.max_segment_ms = o.max_segment_ms;
+    config.stats_every_ticks = kStatsEveryTicks;
     return config;
 }
 
 void transcribe_stream(const TranscribeOptions& o, int chunk_ms, Pace pace,
-                       const std::vector<fs::path>& model_dirs, const StreamSink& sink) {
+                       const std::vector<fs::path>& model_dirs, const StreamSink& sink,
+                       const PushObserver& on_push) {
     // Set once an ERROR event has reached the sink. The session sends one for a failure in a
     // tick, and this reports the failures that come before the session exists.
     bool error_sent = false;
@@ -234,7 +247,7 @@ void transcribe_stream(const TranscribeOptions& o, int chunk_ms, Pace pace,
         sink(event);
     };
     try {
-        run_stream(o, chunk_ms, pace, model_dirs, reporting_sink);
+        run_stream(o, chunk_ms, pace, model_dirs, reporting_sink, on_push);
     } catch (const std::exception& e) {
         if (!error_sent) {
             SessionEvent event;

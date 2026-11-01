@@ -1,6 +1,7 @@
 #include "stream/session.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstddef>
 #include <cstdio>
@@ -67,6 +68,9 @@
 // Ids and events. Segment ids count up from 1 and are not reused, not even after reset(). An
 // ongoing segment keeps its id until it is final. A FINAL takes over the id of a PARTIAL that was
 // shown, so the host replaces the PARTIAL. An empty FINAL is sent only to retract a shown PARTIAL.
+// Stats. With stats_every_ticks set, a STATS event follows the events of every N-th tick that
+// decodes audio. It covers the N ticks: the decode time over the window audio (rtf), and the mean
+// decode time and window length per tick.
 //
 // Stabilizing the ongoing text, agreement policy (text::Stabilizer). Each decode of the ongoing
 // segment goes into its history, and the text shown is built in three steps:
@@ -462,6 +466,7 @@ bool Session::run_tick(bool finish, bool drop_on_failure) {
     }
     next.decoded_generation = generation;
     std::vector<SessionEvent> events;
+    const double window_ms = static_cast<double>(window.size()) / stream::kSamplesPerMs;
     std::vector<float> current = std::move(window);
     std::int64_t origin = origin_samples_;
     std::vector<float> carry;
@@ -474,6 +479,7 @@ bool Session::run_tick(bool finish, bool drop_on_failure) {
             abandon_window(taken, generation);
         }
     };
+    const auto decode_started = std::chrono::steady_clock::now();
     try {
         while (true) {
             cut = analyze(current, finish, origin, next, events);
@@ -498,6 +504,19 @@ bool Session::run_tick(bool finish, bool drop_on_failure) {
     } catch (...) {
         fail("unknown failure in the decoder");
         throw BackendFailure("unknown failure in the decoder");
+    }
+
+    if (config_.stats_every_ticks > 0) {
+        const std::chrono::duration<double, std::milli> decode_time =
+            std::chrono::steady_clock::now() - decode_started;
+        stats_.add(decode_time.count(), window_ms);
+        if (stats_.ticks() >= static_cast<std::size_t>(config_.stats_every_ticks)) {
+            SessionEvent ev;
+            ev.type = ECHOIR_EVENT_STATS;
+            ev.detail = stats_json(stats_.summary(), backend_.name());
+            events.push_back(std::move(ev));
+            stats_.reset();
+        }
     }
 
     // Commit. Everything that can fail is done above, so a failed tick leaves no trace. The

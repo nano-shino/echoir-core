@@ -22,6 +22,7 @@
 #include "backends/asr_backend.h"
 #include "doctest.h"
 #include "errors.h"
+#include "json.hpp"
 #include "stream/event_queue.h"
 #include "stream/session.h"
 #include "vad/vad.h"
@@ -1108,4 +1109,55 @@ TEST_CASE("event queue: finals are kept past capacity while the host does not po
         ++popped;
     }
     CHECK(popped == 1100);
+}
+
+TEST_CASE("session: a STATS event follows every N ticks that decode audio") {
+    SessionConfig config;
+    config.stats_every_ticks = 3;
+    Rig rig(config);
+    rig.push_ms(100);
+    rig.session().process();  // below min_chunk_ms: no tick, so it is not counted
+    for (int i = 0; i < 6; ++i) {
+        rig.push_ms(1000);
+        rig.session().process();
+    }
+    CHECK(count_type(rig.events, ECHOIR_EVENT_STATS) == 2);
+
+    // Nothing is ongoing, so each tick keeps 500 ms and the next tick decodes 1500 ms. The second
+    // event covers ticks 4 to 6, which all have that window.
+    std::vector<nlohmann::json> stats;
+    for (const SessionEvent& ev : rig.events) {
+        if (ev.type == ECHOIR_EVENT_STATS) {
+            CHECK(ev.text.empty());
+            CHECK(ev.start_ms == 0);
+            CHECK(ev.end_ms == 0);
+            stats.push_back(nlohmann::json::parse(ev.detail));
+        }
+    }
+    REQUIRE(stats.size() == 2);
+    CHECK(stats[1]["backend"] == "fake");
+    CHECK(stats[1]["window_ms"] == 1500);
+    CHECK(stats[1]["rtf"].get<double>() >= 0.0);
+    CHECK(stats[1]["decode_ms"].get<std::int64_t>() >= 0);
+}
+
+TEST_CASE("session: a STATS event is sent after the events of its tick") {
+    SessionConfig config;
+    config.stats_every_ticks = 1;
+    Rig rig(config);
+    rig.vad.speech = {{0, 16000}};  // speech runs to the end of the one-second window
+    rig.push_ms(1000);
+    rig.session().process();
+    REQUIRE(!rig.events.empty());
+    CHECK(rig.events.back().type == ECHOIR_EVENT_STATS);
+    CHECK(count_type(rig.events, ECHOIR_EVENT_PARTIAL) == 1);
+}
+
+TEST_CASE("session: no STATS event is sent unless stats are configured") {
+    Rig rig;
+    for (int i = 0; i < 12; ++i) {
+        rig.push_ms(1000);
+        rig.session().process();
+    }
+    CHECK(count_type(rig.events, ECHOIR_EVENT_STATS) == 0);
 }

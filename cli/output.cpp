@@ -109,9 +109,20 @@ std::string event_json(const echoir::SessionEvent& event) {
         case ECHOIR_EVENT_ERROR:
             line = {{"type", "error"}, {"message", event.detail}};
             break;
-        case ECHOIR_EVENT_STATS:
-            // The session sends no statistics, so there is no line to write.
-            return {};
+        case ECHOIR_EVENT_STATS: {
+            // The detail is the statistics object. Its fields follow the type, so the line reads
+            // as one flat object. A detail that is not an object writes no line.
+            const nlohmann::ordered_json fields =
+                nlohmann::ordered_json::parse(event.detail, nullptr, false);
+            if (!fields.is_object()) {
+                return {};
+            }
+            line = {{"type", "stats"}};
+            for (const auto& [key, value] : fields.items()) {
+                line[key] = value;
+            }
+            break;
+        }
     }
     // Bad UTF-8 in a message would throw, so it is replaced rather than dropping the event.
     return line.dump(-1, ' ', false, nlohmann::ordered_json::error_handler_t::replace);

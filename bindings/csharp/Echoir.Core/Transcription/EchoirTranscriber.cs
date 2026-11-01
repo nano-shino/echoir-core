@@ -640,7 +640,7 @@ public sealed class EchoirTranscriber : IDisposable, IAsyncDisposable
             case NativeValues.EventError:
                 return new Notification(NotificationKind.Error, 0, 0, 0, Text(ev.Detail));
             default:
-                // STATS is reserved and never sent by this core.
+                // STATS is sent, but this binding does not surface it yet.
                 return null;
         }
     }

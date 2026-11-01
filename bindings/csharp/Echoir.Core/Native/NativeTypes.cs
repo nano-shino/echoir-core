@@ -49,6 +49,7 @@ internal static class NativeValues
     internal const int EventFinal = 2;
     internal const int EventCleared = 3;
     internal const int EventError = 4;
+    internal const int EventStats = 5;
 
     internal const int StatusState = 4;
 

@@ -19,6 +19,9 @@ case may also name a "policy" ("agreement" or "rollback"), which is passed as `-
 policy of the start command in serve mode); without it echoir uses its default. A stream, realtime
 or stdin case may name a "max_segment_ms": no final may last longer than it, from the start_ms and
 end_ms of its jsonl event. The tool gets no --max-segment-ms, so the check covers its default cap.
+A stream, realtime or stdin case may name "stats": true, which needs at least one stats event in its
+jsonl output. Every stats event must have a number rtf, whole numbers decode_ms and window_ms, and
+a backend name.
 Usage: run_e2e.py --echoir BIN --case ID [--cases FILE] [--vad ID] [--vad-param KEY=VALUE]...
                   [--show-text] [--source-dir DIR]
 
@@ -160,6 +163,11 @@ def check_case(case):
         limit = case["max_segment_ms"]
         if isinstance(limit, bool) or not isinstance(limit, int) or limit <= 0:
             raise Usage(f"case {case_id!r}: max_segment_ms must be a positive whole number")
+    if "stats" in case:
+        if case["mode"] not in STREAM_MODES:
+            raise Usage(f"case {case_id!r}: stats needs a stream, realtime or stdin mode")
+        if not isinstance(case["stats"], bool):
+            raise Usage(f"case {case_id!r}: stats must be true or false")
     if case.get("expect_empty"):
         # A silent clip is judged by its word count, so it has no rate.
         words = case.get("max_words")
@@ -400,7 +408,7 @@ def transcribe(echoir, case, fixture, models_dir, vad, vad_params, context_file)
         args += ["--vad-param", assignment]
     output = run_tool(args, "echoir transcribe", stdin=stdin)
     if case["mode"] in STREAM_MODES:
-        return stream_transcript(output, case.get("max_segment_ms"))
+        return stream_transcript(output, case.get("max_segment_ms"), case.get("stats", False))
     texts = []
     for line in output.splitlines():
         match = TRANSCRIPT_LINE.match(line)
@@ -410,10 +418,27 @@ def transcribe(echoir, case, fixture, models_dir, vad, vad_params, context_file)
     return " ".join(texts)
 
 
-def stream_transcript(output, max_segment_ms=None):
+def check_stats_event(event):
+    """A stats event carries the speed of the ticks it covers, as numbers and a backend name."""
+
+    def is_whole(value):
+        return isinstance(value, int) and not isinstance(value, bool) and value >= 0
+
+    rtf = event.get("rtf")
+    if isinstance(rtf, bool) or not isinstance(rtf, (int, float)) or rtf < 0:
+        raise Fail(f"a stats event has no valid rtf: {event!r}")
+    if not is_whole(event.get("decode_ms")) or not is_whole(event.get("window_ms")):
+        raise Fail(f"a stats event has no whole decode_ms and window_ms: {event!r}")
+    if not isinstance(event.get("backend"), str) or not event["backend"]:
+        raise Fail(f"a stats event has no backend: {event!r}")
+
+
+def stream_transcript(output, max_segment_ms=None, expect_stats=False):
     """The finals of a jsonl stream, joined. An error event fails the case, and so does a final
-    longer than max_segment_ms when that is given."""
+    longer than max_segment_ms when that is given. Stats events are checked, and when expect_stats
+    is set the stream must have at least one."""
     texts = []
+    stats = 0
     for line in output.splitlines():
         try:
             event = json.loads(line)
@@ -425,8 +450,13 @@ def stream_transcript(output, max_segment_ms=None):
             if max_segment_ms is not None and length > max_segment_ms:
                 raise Fail(f"a final lasts {length} ms, longer than the {max_segment_ms} ms cap")
             texts.append(event["text"])
+        elif kind == "stats":
+            check_stats_event(event)
+            stats += 1
         elif kind == "error":
             raise Fail(f"echoir reported an error: {event.get('message', '')}")
+    if expect_stats and stats == 0:
+        raise Fail("the stream sent no stats event")
     return " ".join(text for text in texts if text)
 
 

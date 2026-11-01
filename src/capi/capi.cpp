@@ -338,7 +338,8 @@ echoir_event to_abi(const echoir::SessionEvent& ev) {
     out.start_ms = ev.start_ms;
     out.end_ms = ev.end_ms;
     out.text = ev.text.c_str();
-    out.detail = ev.type == ECHOIR_EVENT_ERROR ? ev.detail.c_str() : nullptr;
+    const bool has_detail = ev.type == ECHOIR_EVENT_ERROR || ev.type == ECHOIR_EVENT_STATS;
+    out.detail = has_detail ? ev.detail.c_str() : nullptr;
     return out;
 }
 
@@ -395,6 +396,7 @@ echoir::SessionConfig session_config_from_abi(const echoir_session_params& param
     config.min_chunk_ms = params.min_chunk_ms;
     config.max_segment_ms = params.max_segment_ms;
     config.emit_partials = params.emit_partials != 0;
+    config.stats_every_ticks = echoir::kStatsEveryTicks;
     config.policy = echoir::StreamPolicy::backend_default;
     // A caller that stops before stream_policy keeps the default. Its bytes are not read.
     if (params.struct_size >= kEndOfStreamPolicy) {
