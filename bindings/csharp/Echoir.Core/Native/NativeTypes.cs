@@ -15,6 +15,8 @@ internal struct SessionParams
     public int EmitPartials;
     public int StreamPolicy;
     public int RetainAudioMs;
+    public nint Tape;
+    public nint TapeTrack;
 }
 
 [StructLayout(LayoutKind.Sequential)]
@@ -61,6 +63,7 @@ internal static class NativeValues
     internal const int EventError = 4;
     internal const int EventStats = 5;
 
+    internal const int StatusInvalidArgument = 1;
     internal const int StatusState = 4;
 
     internal const int SourceMic = 1;

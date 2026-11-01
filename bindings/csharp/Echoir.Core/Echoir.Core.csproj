@@ -40,13 +40,15 @@
     <None Include="../../../third_party/single/*.LICENSE.txt;../../../third_party/licenses/*.txt" Pack="true" PackagePath="licenses" />
   </ItemGroup>
   <!-- The whisper.cpp and llama.cpp LICENSE files have the same name, so they are copied under
-       their library names into the intermediate folder before the package files are collected. -->
+       their library names into the intermediate folder before the package files are collected,
+       with the libopus COPYING file. -->
   <Target Name="EchoirStageSubmoduleLicenses" BeforeTargets="_GetPackageFiles">
     <PropertyGroup>
       <EchoirLicenseStage>$(MSBuildProjectDirectory)/$(IntermediateOutputPath)licenses</EchoirLicenseStage>
     </PropertyGroup>
     <Copy SourceFiles="../../../third_party/whisper.cpp/LICENSE" DestinationFiles="$(EchoirLicenseStage)/whisper.cpp.LICENSE.txt" />
     <Copy SourceFiles="../../../third_party/llama.cpp/LICENSE" DestinationFiles="$(EchoirLicenseStage)/llama.cpp.LICENSE.txt" />
+    <Copy SourceFiles="../../../third_party/opus/COPYING" DestinationFiles="$(EchoirLicenseStage)/opus.LICENSE.txt" />
     <ItemGroup>
       <None Include="$(EchoirLicenseStage)/*.txt" Pack="true" PackagePath="licenses" />
     </ItemGroup>

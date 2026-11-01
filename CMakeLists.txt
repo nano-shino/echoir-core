@@ -71,6 +71,10 @@ target_include_directories(echoir_single SYSTEM INTERFACE
 # and sets ECHOIR_BUILD_WHISPER and ECHOIR_BUILD_QWEN to what was really built.
 include(cmake/backends.cmake)
 
+# --- libopus ------------------------------------------------------------------------
+# The codec of the session tape (src/stream/tape.cpp), built static into the core.
+include(cmake/opus.cmake)
+
 # Android: ggml's OpenMP is the NDK's libomp.so, which Android does not ship. Copy it into the
 # output folder, so the native build is complete for the binding and the CLI.
 if(ANDROID AND GGML_OPENMP_ENABLED)

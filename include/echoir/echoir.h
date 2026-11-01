@@ -85,6 +85,10 @@ typedef struct {
 typedef enum { ECHOIR_POLICY_DEFAULT = 0, ECHOIR_POLICY_AGREEMENT = 1,
                ECHOIR_POLICY_ROLLBACK = 2 } echoir_stream_policy;
 
+// A session tape: the audio of a whole recording session across the sessions that write it. See
+// the echoir_tape_* functions below.
+typedef struct echoir_tape echoir_tape;
+
 // Streaming options for echoir_session_create(). Start from echoir_session_params_init().
 typedef struct {
   uint32_t    struct_size;             // sizeof(echoir_session_params). A smaller value is accepted
@@ -101,8 +105,15 @@ typedef struct {
   // How many ms of the newest audio the session keeps for echoir_session_read_audio(), as 16 kHz
   // mono 16-bit samples (about 1.9 MB per minute). Default 0: no audio is kept. The level envelope
   // of echoir_session_read_peaks() is kept either way. A negative value makes
-  // echoir_session_create() fail.
+  // echoir_session_create() fail. Not used when tape is set.
   int32_t     retain_audio_ms;
+  // The tape that keeps the session's audio, or NULL to keep it in the session (retain_audio_ms).
+  // The session holds its own reference to the tape, so the tape may be freed first. With a tape,
+  // echoir_session_read_audio() and echoir_session_read_peaks() read through to it.
+  echoir_tape* tape;                   // default NULL
+  // The track of the tape the session writes, such as "mic" or "system". Required with a tape;
+  // a track the tape does not have is added, labelled with its name. Read during create only.
+  const char* tape_track;              // default NULL
 } echoir_session_params;
 
 // Kind of an echoir_event.
@@ -239,6 +250,11 @@ ECHOIR_API echoir_status  echoir_session_clear(echoir_session*);
 // including the silence pushed for capture gaps, and restarting at 0 with echoir_session_reset().
 // The store lives until the session is freed, so it can be read after echoir_session_stop(). These
 // calls are thread-safe and may run on any thread, in any mode.
+//
+// With a tape in echoir_session_params, the audio and the envelope are kept on the tape instead,
+// and these calls read through to it on the session timeline: session time t is tape time
+// echoir_session_tape_offset_ms() + t on the session's track. retain_audio_ms is not used then,
+// and audio older than the tape keeps is ECHOIR_ERR_STATE, as an evicted range is.
 
 // Copies the kept audio of [start_ms, end_ms) as 16 kHz mono 16-bit samples into out, which holds
 // cap samples, and sets *n_frames to the number copied. end_ms is clamped to the newest sample, so
@@ -284,6 +300,93 @@ typedef struct {
   int64_t  tick_ms;      // how long the running tick has run; 0 between ticks
 } echoir_lag;
 ECHOIR_API echoir_status  echoir_session_read_lag(echoir_session*, echoir_lag* out);
+
+// Where time 0 of the session is on its tape, in ms, into *out_ms: the start of the session's run
+// on its track, which moves with echoir_session_reset(). Returns ECHOIR_ERR_STATE for a session
+// without a tape, and ECHOIR_ERR_INVALID_ARG for out_ms NULL.
+ECHOIR_API echoir_status  echoir_session_tape_offset_ms(echoir_session*, int64_t* out_ms);
+
+// Session tape. A tape keeps the audio of a recording session across the sessions that write it,
+// for replay and for saving. It holds named tracks, one per input (such as "mic" and "system"),
+// on one timeline that starts at 0. A session given a tape (echoir_session_params.tape) writes
+// its 16 kHz mono audio to one track. A session created later starts at the end of the tape (its
+// longest track, rounded up to whole 10 ms), so the time between two sessions is not stored. A
+// track that is behind the end of the tape when a session starts on it is padded with silence up
+// to there, so all tracks share the timeline. Several sessions may write several tracks at once;
+// a track takes one session at a time.
+//
+// Storage, per track: the newest 2 minutes as 16-bit samples in memory. With a folder, older audio
+// is encoded with Opus at 24 kbit/s (about 11 MB per hour) into one-minute Ogg Opus page files in
+// the folder, written as each one fills, so a crash loses at most the minute being filled.
+// echoir_tape_close() joins each track's pages into <track>.opus in the folder and deletes the
+// page files. In file names, a track name keeps its ASCII letters, digits, '-' and '_', and every
+// other byte becomes %XX ("app:chat" is app%3Achat.opus). Without a folder, a tape keeps only the
+// newest 2 minutes of each track, and the rest is dropped. The 10 ms level envelope covers the
+// whole tape either way.
+//
+// Every tape call is thread-safe, except echoir_tape_free(), which must be the last call on the
+// handle. These calls work in every build, also one without the backends.
+
+// Creates a tape. folder is a UTF-8 directory for the page files and the joined files, created
+// when it is missing; NULL or "" keeps the audio in memory only. Files of the same names in the
+// folder are replaced. Returns NULL on failure, such as a folder that cannot be created. Free the
+// tape with echoir_tape_free().
+ECHOIR_API echoir_tape*   echoir_tape_create(const char* folder);
+
+// Adds a track. name is 1 to 64 bytes of UTF-8 and must differ from every other track name when
+// ASCII case is ignored. label is the name to show; NULL or "" means the name. Returns
+// ECHOIR_ERR_INVALID_ARG for a bad or taken name, and ECHOIR_ERR_STATE after echoir_tape_close().
+ECHOIR_API echoir_status  echoir_tape_add_track(echoir_tape*, const char* name, const char* label);
+
+// The tracks as JSON, UTF-8:
+//   {"duration_ms":N,"closed":bool,
+//    "tracks":[{"name","label","file","duration_ms","writing","runs":[{"start_ms","end_ms"}],
+//               "error"}]}
+// duration_ms of the tape is that of its longest track. file is the name of the track's joined
+// file in the folder, written by echoir_tape_close() ("" without a folder). writing is true while
+// a session writes the track. runs are the stretches that sessions wrote, in order; a seam is
+// where one ends and the next starts. error, present only when a page file could not be written,
+// is the reason: the audio stays in memory and the write is tried again a minute later. The
+// string is owned by the library and stays valid until the next *_json call on this thread. NULL
+// on failure.
+ECHOIR_API const char*    echoir_tape_tracks_json(echoir_tape*);
+
+// The length of the tape, that of its longest track, in whole ms into *out_ms. Returns
+// ECHOIR_ERR_INVALID_ARG for a NULL argument.
+ECHOIR_API echoir_status  echoir_tape_duration_ms(echoir_tape*, int64_t* out_ms);
+
+// Copies the audio of [start_ms, end_ms) of a track as 16 kHz mono 16-bit samples into out, which
+// holds cap samples, and sets *n_frames to the number copied. end_ms is clamped to the end of the
+// track. With out NULL, only *n_frames is set: the number the range needs. Audio from the page
+// files is decoded Opus, so it is close to, not equal to, the samples written; the newest 2
+// minutes are exact. A padded stretch reads as silence. Returns ECHOIR_ERR_STATE when part of the
+// range is no longer kept (a tape without a folder). Returns ECHOIR_ERR_INVALID_ARG for an unknown
+// track, a negative start_ms, end_ms before start_ms, n_frames NULL, or a cap too small for the
+// range. Returns ECHOIR_ERR_INTERNAL when a page file cannot be read.
+ECHOIR_API echoir_status  echoir_tape_read_audio(echoir_tape*, const char* track,
+                                                 int64_t start_ms, int64_t end_ms, int16_t* out,
+                                                 size_t cap, size_t* n_frames);
+
+// The level envelope of [start_ms, end_ms) of a track, as echoir_session_read_peaks() on the
+// tape's timeline. Returns ECHOIR_ERR_INVALID_ARG for an unknown track and the argument errors of
+// echoir_session_read_peaks().
+ECHOIR_API echoir_status  echoir_tape_read_peaks(echoir_tape*, const char* track,
+                                                 int64_t start_ms, int64_t end_ms,
+                                                 int32_t bucket_ms, float* out_minmax, size_t cap,
+                                                 size_t* n_buckets);
+
+// Ends the tape. Sessions still writing it go on, but their audio is no longer kept. With a
+// folder, the rest of each track is encoded and its pages are joined into <track>.opus, a
+// standard Ogg Opus file; a track with no audio gets no file. Reads still work afterwards, from
+// those files. Without a folder, the audio is dropped (reads return ECHOIR_ERR_STATE) and the
+// envelope stays. Run it off the UI thread: it reads and writes every page file. A second call
+// does nothing. Returns ECHOIR_ERR_INTERNAL when a file cannot be written; the tape is closed
+// even then, and the page files of that track stay.
+ECHOIR_API echoir_status  echoir_tape_close(echoir_tape*);
+
+// Releases the handle, closing the tape first if echoir_tape_close() was not called. Sessions
+// that write the tape hold their own reference, so they may outlive the handle.
+ECHOIR_API void           echoir_tape_free(echoir_tape*);
 
 // Capture. The library opens an audio device and pushes its audio into a session in live mode.
 // The device's samples are read on a library thread, so the host only starts and stops it.

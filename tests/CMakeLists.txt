@@ -9,8 +9,9 @@ add_executable(echoir_unit_tests ${ECHOIR_UNIT_SOURCES})
 # use the source tree.
 target_compile_definitions(echoir_unit_tests PRIVATE
   ECHOIR_EXPECTED_VERSION="${PROJECT_VERSION}" ECHOIR_SOURCE_DIR="${PROJECT_SOURCE_DIR}")
+# opus: the tape tests decode the joined files with libopus directly, as a player would.
 target_link_libraries(echoir_unit_tests PRIVATE
-  echoir_options echoir_single echoir_pure echoir Threads::Threads)
+  echoir_options echoir_single echoir_pure echoir opus Threads::Threads)
 
 add_test(NAME unit COMMAND echoir_unit_tests)
 set_tests_properties(unit PROPERTIES LABELS unit)

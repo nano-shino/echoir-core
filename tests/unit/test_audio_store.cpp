@@ -55,7 +55,8 @@ std::vector<float> sine(std::size_t frames, double hz, double rate, double ampli
     return out;
 }
 
-std::vector<std::int16_t> read_all(const AudioStore& store, std::int64_t start_ms = 0,
+template <typename Store>
+std::vector<std::int16_t> read_all(const Store& store, std::int64_t start_ms = 0,
                                    std::int64_t end_ms = kAll) {
     std::vector<std::int16_t> out(store.read_audio(start_ms, end_ms, nullptr, 0));
     CHECK(store.read_audio(start_ms, end_ms, out.data(), out.size()) == out.size());
@@ -87,12 +88,12 @@ TEST_CASE("audio store: 16 kHz mono audio reads back sample for sample") {
         const std::size_t n = std::min<std::size_t>(1000, pcm.size() - at);
         rig.session->push(std::span<const float>(pcm.data() + at, n), 16000, 1);
     }
-    CHECK(read_all(rig.session->audio()) == pushed);
+    CHECK(read_all(*rig.session) == pushed);
     // A sub-range starts at its own time on the timeline, and the end is clamped to the newest.
-    const std::vector<std::int16_t> tail = read_all(rig.session->audio(), 250, 5000);
+    const std::vector<std::int16_t> tail = read_all(*rig.session, 250, 5000);
     REQUIRE(tail.size() == 16000 - 250 * 16);
     CHECK(std::equal(tail.begin(), tail.end(), pushed.begin() + 250 * 16));
-    CHECK(rig.session->audio().read_audio(1000, 2000, nullptr, 0) == 0);
+    CHECK(rig.session->read_audio(1000, 2000, nullptr, 0) == 0);
 }
 
 TEST_CASE("audio store: 48 kHz stereo is stored as the resampler's 16 kHz mono output") {
@@ -105,7 +106,7 @@ TEST_CASE("audio store: 48 kHz stereo is stored as the resampler's 16 kHz mono o
     std::vector<float> expected;
     reference.push(pcm, expected);
 
-    const std::vector<std::int16_t> stored = read_all(rig.session->audio());
+    const std::vector<std::int16_t> stored = read_all(*rig.session);
     REQUIRE(stored.size() == expected.size());
     CHECK(stored.size() > 15900);
     double sum = 0.0;
@@ -177,15 +178,15 @@ TEST_CASE("audio store: reset empties the audio and the envelope") {
     Rig rig(2000);
     std::size_t phase = 0;
     rig.session->push(ts::tone(16000, true, phase), 16000, 1);
-    REQUIRE(rig.session->audio().read_audio(0, kAll, nullptr, 0) == 16000);
+    REQUIRE(rig.session->read_audio(0, kAll, nullptr, 0) == 16000);
     rig.session->reset();
-    CHECK(rig.session->audio().read_audio(0, kAll, nullptr, 0) == 0);
-    CHECK(rig.session->audio().read_peaks(0, kAll, 10, nullptr, 0) == 0);
+    CHECK(rig.session->read_audio(0, kAll, nullptr, 0) == 0);
+    CHECK(rig.session->read_peaks(0, kAll, 10, nullptr, 0) == 0);
 
     // The timeline restarts at 0: new audio is read back from 0.
     const std::vector<std::int16_t> pushed = s16_ramp(1600);
     rig.session->push(to_float(pushed), 16000, 1);
-    CHECK(read_all(rig.session->audio()) == pushed);
+    CHECK(read_all(*rig.session) == pushed);
 }
 
 TEST_CASE("audio store: a muted stretch is silence that keeps the timeline and ends the segment") {
@@ -212,7 +213,7 @@ TEST_CASE("audio store: a muted stretch is silence that keeps the timeline and e
     CHECK(final_it->event.end_ms == 1500);
     CHECK(final_it->event.text == "w1500");
 
-    const std::vector<std::int16_t> stored = read_all(rig.session->audio());
+    const std::vector<std::int16_t> stored = read_all(*rig.session);
     REQUIRE(stored.size() == 3000 * 16);
     CHECK(std::all_of(stored.begin() + 1500 * 16, stored.begin() + 2500 * 16,
                       [](std::int16_t s) { return s == 0; }));

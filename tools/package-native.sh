@@ -43,11 +43,13 @@ copy_licenses() {
     [[ -f "$src" ]] || { echo "Missing license file: $src" >&2; exit 1; }
     cp "$src" "$dest/"
   done
-  for src in "$root/third_party/whisper.cpp/LICENSE" "$root/third_party/llama.cpp/LICENSE"; do
+  for src in "$root/third_party/whisper.cpp/LICENSE" "$root/third_party/llama.cpp/LICENSE" \
+    "$root/third_party/opus/COPYING"; do
     [[ -f "$src" ]] || { echo "Missing license file: $src" >&2; exit 1; }
   done
   cp "$root/third_party/whisper.cpp/LICENSE" "$dest/whisper.cpp.LICENSE.txt"
   cp "$root/third_party/llama.cpp/LICENSE" "$dest/llama.cpp.LICENSE.txt"
+  cp "$root/third_party/opus/COPYING" "$dest/opus.LICENSE.txt"
 }
 
 # Copies the runtime libraries matching lib{echoir,ggml,whisper,llama,mtmd}*.<ext> from $1 to $2,

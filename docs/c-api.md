@@ -61,17 +61,20 @@ the JSON text that the library returns.
 
 - Strings returned by `echoir_version()` have static storage. Do not free them.
 - The string from `echoir_last_error()` stays valid until the calling thread's next failing call.
-- The strings from `echoir_devices_json()` and `echoir_models_json()` are owned by the library. They
-  stay valid until the next `*_json` call on the same thread. Copy them if you need them longer.
-- Engines and sessions come from a create call. Free them with `echoir_engine_free()` and
-  `echoir_session_free()`. Free the sessions of an engine before the engine.
+- The strings from `echoir_devices_json()`, `echoir_models_json()` and `echoir_tape_tracks_json()`
+  are owned by the library. They stay valid until the next `*_json` call on the same thread. Copy them
+  if you need them longer.
+- Engines, sessions and tapes come from a create call. Free them with `echoir_engine_free()`,
+  `echoir_session_free()` and `echoir_tape_free()`. Free the sessions of an engine before the engine.
+  A tape may be freed before or after the sessions that write it: each session holds its own
+  reference.
 - Path strings in the params structs are read during the create call only. The host can release them
   afterwards.
 - Event `text` and `detail` pointers are valid only during the callback. In queue mode they stay valid
   until the next `echoir_session_poll()` or until the session is freed.
 - Freeing NULL is a no-op.
-- The buffers that the host passes to `echoir_session_read_audio()` and
-  `echoir_session_read_peaks()` belong to the host.
+- The buffers that the host passes to the `*_read_audio()` and `*_read_peaks()` calls belong to the
+  host.
 
 ### Threading
 
@@ -79,6 +82,8 @@ the JSON text that the library returns.
 - `echoir_session_push_f32()`, `echoir_session_push_s16()`, `echoir_session_read_audio()`,
   `echoir_session_read_peaks()`, `echoir_session_set_input_muted()` and `echoir_session_read_lag()`
   are thread-safe. They can run on any thread, in either driving mode.
+- Every `echoir_tape_*` call is thread-safe, except `echoir_tape_free()`, which must be the last call
+  on the handle.
 - Callbacks run on the thread that drives the session. In mode A, that is the thread that calls
   `echoir_session_process()`, `echoir_session_flush()`, `echoir_session_reset()` or
   `echoir_session_clear()`. In mode B, it is the session's worker thread.
@@ -114,7 +119,8 @@ The rules for an unexpected size depend on the struct:
 - **`echoir_engine_params`:** a larger size is accepted, and the library reads only the fields it
   knows. A smaller size is refused, and `echoir_engine_create()` returns NULL.
 - **`echoir_session_params`:** a smaller size is accepted if it covers every field up to
-  `emit_partials`. The fields after it take their defaults. A larger size is refused.
+  `emit_partials`. The fields after it take their defaults. A larger size is refused. `tape` is read
+  only when the size also covers `tape_track`.
 - **`echoir_model_params`:** a smaller size is accepted if it covers every field up to `model_id`.
   The fields after it take their defaults. A larger size is refused.
 
@@ -254,7 +260,7 @@ error is set. The defaults are:
 
 - Engine: Whisper backend, `use_gpu` 1, `n_threads` 0, all paths NULL.
 - Session: `language` `"auto"`, `min_chunk_ms` 500, `max_segment_ms` 10000, `emit_partials` 1,
-  `stream_policy` `ECHOIR_POLICY_DEFAULT`, `retain_audio_ms` 0.
+  `stream_policy` `ECHOIR_POLICY_DEFAULT`, `retain_audio_ms` 0, `tape` and `tape_track` NULL.
 - Model: `registry_json`, `models_dir`, `model_id` and `vad_id` NULL, `use_gpu` 1, `n_threads` 0.
 
 ### Engine
@@ -410,8 +416,8 @@ number of samples that `out` holds, and `*n_frames` is set to the number copied.
 the newest sample, so a range past it is shorter, or empty. If `out` is NULL, only `*n_frames` is set,
 to the number of samples the range needs.
 
-It returns `ECHOIR_ERR_STATE` when the session keeps no audio (`retain_audio_ms` is 0), or when part of
-the range is older than what is kept. It returns `ECHOIR_ERR_INVALID_ARG` for a negative `start_ms`,
+It returns `ECHOIR_ERR_STATE` when the session keeps no audio (`retain_audio_ms` is 0 and no tape), or
+when part of the range is older than what is kept. It returns `ECHOIR_ERR_INVALID_ARG` for a negative `start_ms`,
 an `end_ms` before `start_ms`, a NULL `n_frames`, or a `cap` that is too small for the range.
 
 ```c
@@ -463,6 +469,105 @@ decode, so it can be polled for a display.
 Set `struct_size` to `sizeof(echoir_lag)` first. A newer library writes only the fields that fit it;
 an older one fills the fields it knows and zeroes the rest. It returns `ECHOIR_ERR_INVALID_ARG` for a
 NULL `out` or a `struct_size` that does not reach `tick_ms`.
+
+### Session tape
+
+A tape keeps the audio of a whole recording session across the sessions that write it, so a host can
+replay any part of it after a new run or a model switch, and save it. It holds named tracks, one per
+input (for example `mic` and `system`), on one timeline that starts at 0.
+
+- **Writing.** Set `tape` and `tape_track` in `echoir_session_params`. The session writes its 16 kHz
+  mono audio, the same audio that its own store would keep, to that track. A track the tape does not
+  have is added, labelled with its name. A track takes one session at a time; a second one fails
+  `echoir_session_create()` with the reason in the last error.
+- **Seams.** A session starts at the end of the tape, which is its longest track rounded up to whole
+  10 ms. The time between two sessions is therefore not stored: their runs meet at a seam.
+  `echoir_session_reset()` ends the session's run and starts a new one in the same way.
+- **Several tracks.** Several sessions can write several tracks at the same time. A track that is
+  behind the end of the tape when a session starts on it is padded with silence up to there, so all
+  tracks keep one timeline.
+- **Session reads.** `echoir_session_read_audio()` and `echoir_session_read_peaks()` read through to
+  the tape, on the session timeline. Session time `t` is tape time
+  `echoir_session_tape_offset_ms() + t`. `retain_audio_ms` is not used.
+- **Storage.** The newest 2 minutes of each track stay in memory as 16-bit samples. With a folder,
+  older audio is encoded with Opus at 24 kbit/s (about 11 MB per hour) and written to the folder as
+  one-minute Ogg Opus page files, `<track>.00001.opus` and so on, as each one fills. A crash loses at
+  most the minute being filled. `echoir_tape_close()` joins each track's pages into `<track>.opus`, a
+  standard Ogg Opus file, and deletes the page files. Without a folder, only the newest 2 minutes of
+  each track are kept. The 10 ms level envelope covers the whole tape either way.
+- **File names.** A track name keeps its ASCII letters, digits, `-` and `_`. Every other byte becomes
+  `%XX`, so `app:chat` is stored as `app%3Achat.opus`. Track names are 1 to 64 bytes and differ from
+  each other when ASCII case is ignored, so their files never collide.
+- **Reads.** Reads go by time range. Audio from the page files is decoded Opus: close to what was
+  written, not equal to it. Only the pages that a range needs are read and decoded. A padded stretch
+  reads as silence.
+
+```c
+echoir_tape*  echoir_tape_create(const char* folder);
+void          echoir_tape_free(echoir_tape* tape);
+echoir_status echoir_tape_close(echoir_tape* tape);
+```
+
+`echoir_tape_create()` makes a tape whose files go to `folder` (UTF-8), which is created when it is
+missing. NULL or `""` keeps the audio in memory only. Files of the same names in the folder are
+replaced. It returns NULL on failure.
+
+`echoir_tape_close()` ends the tape. Sessions that still write it go on, but their audio is no longer
+kept. With a folder, the rest of each track is encoded and the pages are joined into `<track>.opus`; a
+track with no audio gets no file. Reads still work after the close, from those files. Without a folder
+the audio is dropped, reads return `ECHOIR_ERR_STATE`, and the envelope stays. A second call does
+nothing. It reads and writes every page file, so run it off the UI thread. It returns
+`ECHOIR_ERR_INTERNAL` when a file cannot be written; the tape is closed even then, and the page files
+of that track stay.
+
+`echoir_tape_free()` releases the handle, and closes the tape first if `echoir_tape_close()` was not
+called.
+
+```c
+echoir_status echoir_tape_add_track(echoir_tape* tape, const char* name, const char* label);
+const char*   echoir_tape_tracks_json(echoir_tape* tape);
+echoir_status echoir_tape_duration_ms(echoir_tape* tape, int64_t* out_ms);
+```
+
+`echoir_tape_add_track()` adds a track with a display label (NULL or `""` uses the name). It returns
+`ECHOIR_ERR_INVALID_ARG` for a bad or taken name and `ECHOIR_ERR_STATE` after a close.
+
+`echoir_tape_tracks_json()` returns the tracks:
+
+```json
+{"duration_ms": 185000, "closed": false,
+ "tracks": [{"name": "mic", "label": "Microphone", "file": "mic.opus", "duration_ms": 185000,
+             "writing": true, "runs": [{"start_ms": 0, "end_ms": 61000},
+                                       {"start_ms": 61010, "end_ms": 185000}]}]}
+```
+
+`file` is the name of the track's joined file in the folder (`""` without a folder); it exists after
+`echoir_tape_close()`. `writing` is true while a session writes the track. `runs` are the stretches
+that sessions wrote, in order, so the seams are between them. A track has an `error` field only when a
+page file could not be written: the audio then stays in memory and the write is tried again when the
+next minute has filled.
+
+`echoir_tape_duration_ms()` gives the length of the longest track in whole ms.
+
+```c
+echoir_status echoir_tape_read_audio(echoir_tape* tape, const char* track, int64_t start_ms,
+                                     int64_t end_ms, int16_t* out, size_t cap, size_t* n_frames);
+echoir_status echoir_tape_read_peaks(echoir_tape* tape, const char* track, int64_t start_ms,
+                                     int64_t end_ms, int32_t bucket_ms, float* out_minmax,
+                                     size_t cap, size_t* n_buckets);
+```
+
+These work as `echoir_session_read_audio()` and `echoir_session_read_peaks()`, on a track of the tape
+and on the tape's timeline. `echoir_tape_read_audio()` returns `ECHOIR_ERR_STATE` when part of the
+range is no longer kept (a tape without a folder), `ECHOIR_ERR_INVALID_ARG` for an unknown track and the
+argument errors of the session call, and `ECHOIR_ERR_INTERNAL` when a page file cannot be read.
+
+```c
+echoir_status echoir_session_tape_offset_ms(echoir_session* session, int64_t* out_ms);
+```
+
+Sets `*out_ms` to where time 0 of the session is on its tape: the start of the session's current
+run. It returns `ECHOIR_ERR_STATE` for a session without a tape.
 
 ### Capture
 

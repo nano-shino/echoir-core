@@ -44,8 +44,18 @@ public sealed record TranscriberOptions
 
     // How much of the newest audio the session keeps for TryReadAudio, as 16 kHz mono (about
     // 1.9 MB a minute). Zero keeps none. The level envelope behind ReadPeaks and Level is kept
-    // either way.
+    // either way. Ignored when Tape is set.
     public TimeSpan RetainAudio { get; init; } = TimeSpan.Zero;
+
+    // The tape that keeps the run's audio, across runs and model switches. The run writes the
+    // track TapeTrack, starting at the end of the tape, and TryReadAudio, ReadPeaks and Level read
+    // through to it on the run's own timeline (TapeOffsetMs maps it to the tape). Null keeps the
+    // audio in the run (RetainAudio).
+    public EchoirTape? Tape { get; init; }
+
+    // The track of Tape that the run writes. Null: "system" for the loopback source, "mic" for the
+    // others. A track the tape does not have is added, labelled with its name.
+    public string? TapeTrack { get; init; }
 }
 
 // An error from the session, such as a lost device. DeviceLost is true for "device_lost".

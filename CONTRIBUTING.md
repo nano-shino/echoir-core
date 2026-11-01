@@ -87,7 +87,8 @@ A case whose model is missing skips, so a run without the model files still pass
   open in `src/audio/wav.cpp` and environment access in `src/text/env.cpp` on Windows, and
   `snprintf` in place of floating-point `std::to_chars` in `src/stream/vad_postprocess.cpp` on Apple.
 - No new third-party dependency without a discussion in an issue. The current ones are vendored in
-  `third_party/single/` with their licenses, plus the whisper.cpp and llama.cpp submodules.
+  `third_party/single/` with their licenses, plus the whisper.cpp, llama.cpp and libopus
+  submodules.
 - Comments and documentation must make sense on their own. Do not refer to internal planning
   documents, private notes, issue tracker entries that are not public, task identifiers or local
   file paths.

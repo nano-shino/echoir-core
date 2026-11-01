@@ -1,7 +1,7 @@
 Third-party notices for echoir-core
 
 This file lists the third-party work that echoir-core ports, converts, builds in, ships or depends
-on. Section 3 covers tools that are not distributed. Sections 4 to 11 cover the libraries that the
+on. Section 3 covers tools that are not distributed. Sections 4 to 12 cover the libraries that the
 built libraries, the echoir command line and the release archives contain. The full license texts
 of these libraries ship in the licenses/ folder of every release archive and of the NuGet package.
 In the repository, the libraries under third_party/ keep their license files next to them: the
@@ -158,3 +158,17 @@ third_party/single/, and the Apache-2.0 and LLVM exception texts in third_party/
       echoir-<version>-windows-vulkan-x64.zip) contain them, so echoir.exe runs without the Visual
       C++ redistributable installed. vcomp140.dll is the OpenMP runtime that ggml-cpu imports. The
       NuGet win-x64 assets do not contain these files.
+
+12. libopus
+
+    Copyright: (c) 2001-2023 Xiph.Org, Skype Limited, Octasic, Jean-Marc Valin, Timothy B.
+               Terriberry, CSIRO, Gregory Maxwell, Mark Borgerding, Erik de Castro Lopo, Mozilla,
+               Amazon (from its COPYING file)
+    License:  BSD 3-Clause (licenses/opus.LICENSE.txt). The Opus codec is covered by
+              royalty-free patent licenses; see https://opus-codec.org/license/.
+    Upstream: https://github.com/xiph/opus, git submodule third_party/opus at ddbe483 (v1.5.2)
+
+    Use in echoir-core
+    - Built as a static library and linked into the core. The session tape (src/stream/tape.cpp)
+      encodes its older audio with it into Ogg Opus files and decodes them for reads. The Ogg
+      container is written and read by echoir-core's own code (src/audio/ogg_opus.cpp).

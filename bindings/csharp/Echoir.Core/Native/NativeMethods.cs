@@ -67,6 +67,36 @@ internal static unsafe partial class NativeMethods
     [LibraryImport(Library, EntryPoint = "echoir_session_read_lag")]
     internal static partial int SessionReadLag(nint session, LagData* output);
 
+    [LibraryImport(Library, EntryPoint = "echoir_session_process")]
+    internal static partial int SessionProcess(nint session);
+
+    [LibraryImport(Library, EntryPoint = "echoir_session_tape_offset_ms")]
+    internal static partial int SessionTapeOffsetMs(nint session, long* outMs);
+
+    [LibraryImport(Library, EntryPoint = "echoir_tape_create")]
+    internal static partial nint TapeCreate(nint folder);
+
+    [LibraryImport(Library, EntryPoint = "echoir_tape_add_track")]
+    internal static partial int TapeAddTrack(nint tape, nint name, nint label);
+
+    [LibraryImport(Library, EntryPoint = "echoir_tape_tracks_json")]
+    internal static partial nint TapeTracksJson(nint tape);
+
+    [LibraryImport(Library, EntryPoint = "echoir_tape_duration_ms")]
+    internal static partial int TapeDurationMs(nint tape, long* outMs);
+
+    [LibraryImport(Library, EntryPoint = "echoir_tape_read_audio")]
+    internal static partial int TapeReadAudio(nint tape, nint track, long startMs, long endMs, short* output, nuint cap, nuint* nFrames);
+
+    [LibraryImport(Library, EntryPoint = "echoir_tape_read_peaks")]
+    internal static partial int TapeReadPeaks(nint tape, nint track, long startMs, long endMs, int bucketMs, float* outMinMax, nuint cap, nuint* nBuckets);
+
+    [LibraryImport(Library, EntryPoint = "echoir_tape_close")]
+    internal static partial int TapeClose(nint tape);
+
+    [LibraryImport(Library, EntryPoint = "echoir_tape_free")]
+    internal static partial void TapeFree(nint tape);
+
     [LibraryImport(Library, EntryPoint = "echoir_devices_json")]
     internal static partial nint DevicesJson();
 
