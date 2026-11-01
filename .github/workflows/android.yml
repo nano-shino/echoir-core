@@ -1,0 +1,50 @@
+# Android arm64 cross-build of the echoir library, with the NDK toolchain and preset android-arm64.
+# No tests and no packaging: the release workflow packages the same build.
+name: android
+
+on:
+  push:
+    branches: [main]
+    paths-ignore: &unbuilt
+      - "**.md"
+      - "docs/**"
+      - "LICENSE"
+      - "THIRD_PARTY_NOTICES"
+      - "bindings/csharp/**"
+      - "tools/package-*"
+      - ".github/workflows/release.yml"
+  pull_request:
+    paths-ignore: *unbuilt
+  workflow_dispatch:
+
+concurrency:
+  group: android-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  ANDROID_NDK_VERSION: 29.0.14033849
+
+jobs:
+  cpu-arm64:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - run: sudo apt-get update && sudo apt-get install -y ninja-build
+
+      - name: Android NDK
+        run: |
+          yes | "$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager" --install "ndk;$ANDROID_NDK_VERSION" >/dev/null
+          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/$ANDROID_NDK_VERSION" >> "$GITHUB_ENV"
+
+      - name: Configure
+        run: cmake --preset android-arm64 -DBUILD_TESTING=OFF
+
+      - name: Build
+        run: cmake --build --preset android-arm64 --target echoir echoir_android_libomp
