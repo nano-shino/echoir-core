@@ -18,6 +18,7 @@
 #include "mtmd-helper.h"
 #include "mtmd.h"
 #include "stream/signal.h"
+#include "text/itn.h"
 
 namespace echoir {
 namespace {
@@ -399,6 +400,9 @@ DecodeResult QwenBackend::decode(const DecodeRequest& request) {
     if (tag_at != std::string::npos) {
         result.text.erase(0, tag_at + kTranscriptTag.size());
     }
+    // Qwen3-ASR writes numbers as words ("thirtieth", "four point five"). Only the returned text
+    // changes. The continuation keeps the model's own output, which the next decode reads back.
+    result.text = text::normalize_numbers(result.text);
     return result;
 }
 
