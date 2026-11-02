@@ -34,9 +34,10 @@
 
 namespace {
 
-// Per-thread last failure. The pointer from echoir_last_error() stays valid until this thread's
-// next failing call.
+// Per-thread last failure: its message and its status. The pointer from echoir_last_error() stays
+// valid until this thread's next failing call.
 thread_local std::string g_last_error;
+thread_local echoir_status g_last_status = ECHOIR_OK;
 
 // Per-thread result of the *_json calls. Each call overwrites it, so its pointer stays valid until
 // the next *_json call on this thread.
@@ -48,9 +49,10 @@ const char* set_json_result(std::string text) {
     return g_json_result.c_str();
 }
 
-// Records "<fn>: <what>". Nothing may throw across the ABI, so on allocation failure the
-// previous message stays in place.
-void set_last_error(const char* fn, const char* what) noexcept {
+// Records "<fn>: <what>" and the status the failing call reports. Nothing may throw across the
+// ABI, so on allocation failure the previous message stays in place.
+void set_last_error(const char* fn, const char* what, echoir_status status) noexcept {
+    g_last_status = status;
     try {
         g_last_error = std::string(fn) + ": " + what;
     } catch (...) {
@@ -58,35 +60,35 @@ void set_last_error(const char* fn, const char* what) noexcept {
     }
 }
 
-// Records the exception being handled as "<fn>: <reason>" and returns the status it maps to. Call
-// it only from a catch block. Engine create returns a pointer, so the status is dropped there and
-// only the message reaches the host. Session functions return it.
+// Records the exception being handled as "<fn>: <reason>" with the status it maps to, and returns
+// that status. Call it only from a catch block. A call that returns a pointer drops the return
+// value, and the host reads the status with echoir_last_status().
 echoir_status status_of_current_exception(const char* fn) noexcept {
     try {
         throw;
     } catch (const std::invalid_argument& e) {
-        set_last_error(fn, e.what());
+        set_last_error(fn, e.what(), ECHOIR_ERR_INVALID_ARG);
         return ECHOIR_ERR_INVALID_ARG;
     } catch (const echoir::ModelLoadError& e) {
-        set_last_error(fn, e.what());
+        set_last_error(fn, e.what(), ECHOIR_ERR_MODEL_LOAD);
         return ECHOIR_ERR_MODEL_LOAD;
     } catch (const echoir::BackendUnavailable& e) {
-        set_last_error(fn, e.what());
+        set_last_error(fn, e.what(), ECHOIR_ERR_BACKEND);
         return ECHOIR_ERR_BACKEND;
     } catch (const echoir::BackendFailure& e) {
-        set_last_error(fn, e.what());
+        set_last_error(fn, e.what(), ECHOIR_ERR_BACKEND);
         return ECHOIR_ERR_BACKEND;
     } catch (const echoir::StateError& e) {
-        set_last_error(fn, e.what());
+        set_last_error(fn, e.what(), ECHOIR_ERR_STATE);
         return ECHOIR_ERR_STATE;
     } catch (const echoir::NotSupported& e) {
-        set_last_error(fn, e.what());
+        set_last_error(fn, e.what(), ECHOIR_ERR_NOT_IMPLEMENTED);
         return ECHOIR_ERR_NOT_IMPLEMENTED;
     } catch (const std::exception& e) {
-        set_last_error(fn, e.what());
+        set_last_error(fn, e.what(), ECHOIR_ERR_INTERNAL);
         return ECHOIR_ERR_INTERNAL;
     } catch (...) {
-        set_last_error(fn, "unknown error");
+        set_last_error(fn, "unknown error", ECHOIR_ERR_INTERNAL);
         return ECHOIR_ERR_INTERNAL;
     }
 }
@@ -131,9 +133,12 @@ const char* echoir_version(void) { return ECHOIR_VERSION_STRING; }
 
 const char* echoir_last_error(void) { return g_last_error.c_str(); }
 
+echoir_status echoir_last_status(void) { return g_last_status; }
+
 void echoir_engine_params_init(echoir_engine_params* p) {
     if (p == nullptr) {
-        set_last_error("echoir_engine_params_init", "params must not be NULL");
+        set_last_error("echoir_engine_params_init", "params must not be NULL",
+                       ECHOIR_ERR_INVALID_ARG);
         return;
     }
     // Zero first, so pointer fields start NULL and any field added later starts at 0.
@@ -146,7 +151,8 @@ void echoir_engine_params_init(echoir_engine_params* p) {
 
 void echoir_session_params_init(echoir_session_params* p) {
     if (p == nullptr) {
-        set_last_error("echoir_session_params_init", "params must not be NULL");
+        set_last_error("echoir_session_params_init", "params must not be NULL",
+                       ECHOIR_ERR_INVALID_ARG);
         return;
     }
     *p = echoir_session_params{};
@@ -160,7 +166,8 @@ void echoir_session_params_init(echoir_session_params* p) {
 
 void echoir_model_params_init(echoir_model_params* p) {
     if (p == nullptr) {
-        set_last_error("echoir_model_params_init", "params must not be NULL");
+        set_last_error("echoir_model_params_init", "params must not be NULL",
+                       ECHOIR_ERR_INVALID_ARG);
         return;
     }
     *p = echoir_model_params{};
@@ -289,13 +296,15 @@ echoir_engine* echoir_engine_create_from_model(const echoir_model_params* params
 #else
 echoir_engine* echoir_engine_create(const echoir_engine_params*) {
     set_last_error("echoir_engine_create",
-                   "the VAD and backends are not built (ECHOIR_WITH_WHISPER=OFF)");
+                   "the VAD and backends are not built (ECHOIR_WITH_WHISPER=OFF)",
+                   ECHOIR_ERR_NOT_IMPLEMENTED);
     return nullptr;
 }
 
 echoir_engine* echoir_engine_create_from_model(const echoir_model_params*) {
     set_last_error("echoir_engine_create_from_model",
-                   "the VAD and backends are not built (ECHOIR_WITH_WHISPER=OFF)");
+                   "the VAD and backends are not built (ECHOIR_WITH_WHISPER=OFF)",
+                   ECHOIR_ERR_NOT_IMPLEMENTED);
     return nullptr;
 }
 #endif
@@ -354,7 +363,7 @@ echoir_event to_abi(const echoir::SessionEvent& ev) {
 template <typename Call>
 echoir_status run_session_call(echoir_session* s, const char* fn, Call&& call) noexcept {
     if (s == nullptr) {
-        set_last_error(fn, "session must not be NULL");
+        set_last_error(fn, "session must not be NULL", ECHOIR_ERR_INVALID_ARG);
         return ECHOIR_ERR_INVALID_ARG;
     }
     try {
@@ -369,15 +378,15 @@ echoir_status run_session_call(echoir_session* s, const char* fn, Call&& call) n
 // and returns ECHOIR_ERR_INVALID_ARG.
 echoir_status check_push_args(const char* fn, const void* pcm, size_t n_frames, int32_t channels) {
     if (channels <= 0) {
-        set_last_error(fn, "channels must be positive");
+        set_last_error(fn, "channels must be positive", ECHOIR_ERR_INVALID_ARG);
         return ECHOIR_ERR_INVALID_ARG;
     }
     if (n_frames > 0 && pcm == nullptr) {
-        set_last_error(fn, "pcm must not be NULL");
+        set_last_error(fn, "pcm must not be NULL", ECHOIR_ERR_INVALID_ARG);
         return ECHOIR_ERR_INVALID_ARG;
     }
     if (n_frames > SIZE_MAX / static_cast<size_t>(channels)) {
-        set_last_error(fn, "n_frames is too large");
+        set_last_error(fn, "n_frames is too large", ECHOIR_ERR_INVALID_ARG);
         return ECHOIR_ERR_INVALID_ARG;
     }
     return ECHOIR_OK;
@@ -445,7 +454,7 @@ echoir_session* echoir_session_create(echoir_engine* engine, const echoir_sessio
                                       echoir_event_cb cb, void* user) {
     const char* fn = "echoir_session_create";
     if (params == nullptr) {
-        set_last_error(fn, "params must not be NULL");
+        set_last_error(fn, "params must not be NULL", ECHOIR_ERR_INVALID_ARG);
         return nullptr;
     }
     // The settings are read before the engine is checked, so a bad struct is reported even when
@@ -458,12 +467,12 @@ echoir_session* echoir_session_create(echoir_engine* engine, const echoir_sessio
         return nullptr;
     }
     if (engine == nullptr) {
-        set_last_error(fn, "engine must not be NULL");
+        set_last_error(fn, "engine must not be NULL", ECHOIR_ERR_INVALID_ARG);
         return nullptr;
     }
     bool expected = false;
     if (!engine->session_open.compare_exchange_strong(expected, true)) {
-        set_last_error(fn, "the engine already serves a session");
+        set_last_error(fn, "the engine already serves a session", ECHOIR_ERR_STATE);
         return nullptr;
     }
     try {
@@ -508,16 +517,16 @@ void echoir_session_free(echoir_session* s) {
 echoir_status echoir_session_poll(echoir_session* s, echoir_event* out) {
     const char* fn = "echoir_session_poll";
     if (s == nullptr || out == nullptr) {
-        set_last_error(fn, "session and out must not be NULL");
+        set_last_error(fn, "session and out must not be NULL", ECHOIR_ERR_INVALID_ARG);
         return ECHOIR_ERR_INVALID_ARG;
     }
     if (s->queue == nullptr) {
-        set_last_error(fn, "the session is in callback mode");
+        set_last_error(fn, "the session is in callback mode", ECHOIR_ERR_STATE);
         return ECHOIR_ERR_STATE;
     }
     try {
         if (!s->queue->pop(s->polled)) {
-            set_last_error(fn, "the event queue is empty");
+            // An empty queue is not a failure, so the last error and status stay as they are.
             return ECHOIR_ERR_STATE;
         }
         *out = to_abi(s->polled);
@@ -534,7 +543,7 @@ echoir_status echoir_session_push_f32(echoir_session* s, const float* pcm, size_
         return bad;
     }
     if (s != nullptr && s->feed != nullptr) {
-        set_last_error(fn, "the session captures its own audio");
+        set_last_error(fn, "the session captures its own audio", ECHOIR_ERR_STATE);
         return ECHOIR_ERR_STATE;
     }
     const auto ch = static_cast<size_t>(channels);
@@ -550,7 +559,7 @@ echoir_status echoir_session_push_s16(echoir_session* s, const int16_t* pcm, siz
         return bad;
     }
     if (s != nullptr && s->feed != nullptr) {
-        set_last_error(fn, "the session captures its own audio");
+        set_last_error(fn, "the session captures its own audio", ECHOIR_ERR_STATE);
         return ECHOIR_ERR_STATE;
     }
     const auto ch = static_cast<size_t>(channels);
@@ -578,15 +587,15 @@ echoir_status echoir_session_start_capture(echoir_session* s, echoir_source sour
                                            const char* device_id) {
     const char* fn = "echoir_session_start_capture";
     if (s == nullptr) {
-        set_last_error(fn, "session must not be NULL");
+        set_last_error(fn, "session must not be NULL", ECHOIR_ERR_INVALID_ARG);
         return ECHOIR_ERR_INVALID_ARG;
     }
     if (source != ECHOIR_SOURCE_MIC && source != ECHOIR_SOURCE_LOOPBACK) {
-        set_last_error(fn, "source is not a known source");
+        set_last_error(fn, "source is not a known source", ECHOIR_ERR_INVALID_ARG);
         return ECHOIR_ERR_INVALID_ARG;
     }
     if (s->feed != nullptr) {
-        set_last_error(fn, "the session already captures its own audio");
+        set_last_error(fn, "the session already captures its own audio", ECHOIR_ERR_STATE);
         return ECHOIR_ERR_STATE;
     }
     try {
@@ -607,6 +616,27 @@ echoir_status echoir_session_start_capture(echoir_session* s, echoir_source sour
     } catch (...) {
         return status_of_current_exception(fn);
     }
+}
+
+echoir_status echoir_session_capture_state(echoir_session* s, int32_t* out_state) {
+    const char* fn = "echoir_session_capture_state";
+    if (s == nullptr || out_state == nullptr) {
+        set_last_error(fn, "session and out_state must not be NULL", ECHOIR_ERR_INVALID_ARG);
+        return ECHOIR_ERR_INVALID_ARG;
+    }
+    // The feed is set by start_capture and dropped by stop, so no feed is a session that does not
+    // capture.
+    const echoir::capture::CaptureFeed* feed = s->feed.get();
+    if (feed == nullptr) {
+        *out_state = ECHOIR_CAPTURE_OFF;
+    } else if (feed->ended()) {
+        *out_state = ECHOIR_CAPTURE_ENDED;
+    } else if (feed->waiting()) {
+        *out_state = ECHOIR_CAPTURE_WAITING;
+    } else {
+        *out_state = ECHOIR_CAPTURE_LIVE;
+    }
+    return ECHOIR_OK;
 }
 
 // A session that captures its own audio is flushed here, so its last segment is final.
@@ -649,7 +679,7 @@ echoir_status echoir_session_read_audio(echoir_session* s, int64_t start_ms, int
                                         int16_t* out, size_t cap, size_t* n_frames) {
     const char* fn = "echoir_session_read_audio";
     if (n_frames == nullptr) {
-        set_last_error(fn, "n_frames must not be NULL");
+        set_last_error(fn, "n_frames must not be NULL", ECHOIR_ERR_INVALID_ARG);
         return ECHOIR_ERR_INVALID_ARG;
     }
     *n_frames = 0;
@@ -663,7 +693,7 @@ echoir_status echoir_session_read_peaks(echoir_session* s, int64_t start_ms, int
                                         size_t* n_buckets) {
     const char* fn = "echoir_session_read_peaks";
     if (n_buckets == nullptr) {
-        set_last_error(fn, "n_buckets must not be NULL");
+        set_last_error(fn, "n_buckets must not be NULL", ECHOIR_ERR_INVALID_ARG);
         return ECHOIR_ERR_INVALID_ARG;
     }
     *n_buckets = 0;
@@ -681,14 +711,15 @@ echoir_status echoir_session_set_input_muted(echoir_session* s, int32_t muted) {
 echoir_status echoir_session_read_lag(echoir_session* s, echoir_lag* out) {
     const char* fn = "echoir_session_read_lag";
     if (out == nullptr) {
-        set_last_error(fn, "out must not be NULL");
+        set_last_error(fn, "out must not be NULL", ECHOIR_ERR_INVALID_ARG);
         return ECHOIR_ERR_INVALID_ARG;
     }
     // The size of the first version of echoir_lag. A host built against it keeps working when the
     // struct grows; a host built against a later header gets the fields past this version zeroed.
     constexpr size_t kEndOfTickMs = offsetof(echoir_lag, tick_ms) + sizeof(out->tick_ms);
     if (out->struct_size < kEndOfTickMs) {
-        set_last_error(fn, "struct_size is smaller than the fields up to tick_ms");
+        set_last_error(fn, "struct_size is smaller than the fields up to tick_ms",
+                       ECHOIR_ERR_INVALID_ARG);
         return ECHOIR_ERR_INVALID_ARG;
     }
     return run_session_call(s, fn, [out](echoir::Session& session) {
@@ -706,7 +737,7 @@ echoir_status echoir_session_read_lag(echoir_session* s, echoir_lag* out) {
 echoir_status echoir_session_tape_offset_ms(echoir_session* s, int64_t* out_ms) {
     const char* fn = "echoir_session_tape_offset_ms";
     if (out_ms == nullptr) {
-        set_last_error(fn, "out_ms must not be NULL");
+        set_last_error(fn, "out_ms must not be NULL", ECHOIR_ERR_INVALID_ARG);
         return ECHOIR_ERR_INVALID_ARG;
     }
     return run_session_call(s, fn, [out_ms](echoir::Session& session) {
@@ -722,7 +753,8 @@ echoir_status echoir_session_tape_offset_ms(echoir_session* s, int64_t* out_ms) 
 // are missing.
 namespace {
 echoir_status not_built(const char* fn) noexcept {
-    set_last_error(fn, "the VAD and backends are not built (ECHOIR_WITH_WHISPER=OFF)");
+    set_last_error(fn, "the VAD and backends are not built (ECHOIR_WITH_WHISPER=OFF)",
+                   ECHOIR_ERR_NOT_IMPLEMENTED);
     return ECHOIR_ERR_NOT_IMPLEMENTED;
 }
 }  // namespace
@@ -755,6 +787,10 @@ echoir_status echoir_session_start(echoir_session*) { return not_built("echoir_s
 
 echoir_status echoir_session_start_capture(echoir_session*, echoir_source, const char*) {
     return not_built("echoir_session_start_capture");
+}
+
+echoir_status echoir_session_capture_state(echoir_session*, int32_t*) {
+    return not_built("echoir_session_capture_state");
 }
 
 echoir_status echoir_session_stop(echoir_session*) { return not_built("echoir_session_stop"); }
@@ -794,7 +830,7 @@ namespace {
 template <typename Call>
 echoir_status run_tape_call(echoir_tape* t, const char* fn, Call&& call) noexcept {
     if (t == nullptr) {
-        set_last_error(fn, "tape must not be NULL");
+        set_last_error(fn, "tape must not be NULL", ECHOIR_ERR_INVALID_ARG);
         return ECHOIR_ERR_INVALID_ARG;
     }
     try {
@@ -825,7 +861,7 @@ echoir_tape* echoir_tape_create(const char* folder) {
 echoir_status echoir_tape_add_track(echoir_tape* t, const char* name, const char* label) {
     const char* fn = "echoir_tape_add_track";
     if (name == nullptr) {
-        set_last_error(fn, "name must not be NULL");
+        set_last_error(fn, "name must not be NULL", ECHOIR_ERR_INVALID_ARG);
         return ECHOIR_ERR_INVALID_ARG;
     }
     return run_tape_call(t, fn, [&](echoir::stream::Tape& tape) {
@@ -844,7 +880,7 @@ const char* echoir_tape_tracks_json(echoir_tape* t) {
 echoir_status echoir_tape_duration_ms(echoir_tape* t, int64_t* out_ms) {
     const char* fn = "echoir_tape_duration_ms";
     if (out_ms == nullptr) {
-        set_last_error(fn, "out_ms must not be NULL");
+        set_last_error(fn, "out_ms must not be NULL", ECHOIR_ERR_INVALID_ARG);
         return ECHOIR_ERR_INVALID_ARG;
     }
     return run_tape_call(t, fn,
@@ -855,7 +891,7 @@ echoir_status echoir_tape_read_audio(echoir_tape* t, const char* track, int64_t 
                                      int64_t end_ms, int16_t* out, size_t cap, size_t* n_frames) {
     const char* fn = "echoir_tape_read_audio";
     if (n_frames == nullptr || track == nullptr) {
-        set_last_error(fn, "track and n_frames must not be NULL");
+        set_last_error(fn, "track and n_frames must not be NULL", ECHOIR_ERR_INVALID_ARG);
         return ECHOIR_ERR_INVALID_ARG;
     }
     *n_frames = 0;
@@ -869,7 +905,7 @@ echoir_status echoir_tape_read_peaks(echoir_tape* t, const char* track, int64_t 
                                      size_t cap, size_t* n_buckets) {
     const char* fn = "echoir_tape_read_peaks";
     if (n_buckets == nullptr || track == nullptr) {
-        set_last_error(fn, "track and n_buckets must not be NULL");
+        set_last_error(fn, "track and n_buckets must not be NULL", ECHOIR_ERR_INVALID_ARG);
         return ECHOIR_ERR_INVALID_ARG;
     }
     *n_buckets = 0;

@@ -26,11 +26,27 @@ public sealed class CaptureTests
 
             await using var transcriber = new EchoirTranscriber();
             await transcriber.LoadAsync("whisper-tiny-en", TestPaths.ModelsDir);
+            var changes = new List<CaptureState>();
+            transcriber.CaptureStateChanged += (_, state) =>
+            {
+                lock (changes)
+                {
+                    changes.Add(state);
+                }
+            };
+            Assert.AreEqual(CaptureState.Off, transcriber.CaptureState);
             transcriber.Start(AudioSource.Mic, devices.Capture[0].Id);
             Assert.IsTrue(transcriber.IsRunning);
+            // The null device stays open, so the capture is live until the stop.
+            Wait.Until(() => transcriber.CaptureState == CaptureState.Live, "a live capture");
 
             await transcriber.StopAsync();
             Assert.IsFalse(transcriber.IsRunning);
+            Assert.AreEqual(CaptureState.Off, transcriber.CaptureState);
+            lock (changes)
+            {
+                CollectionAssert.AreEqual(new[] { CaptureState.Live, CaptureState.Off }, changes);
+            }
         }
         finally
         {

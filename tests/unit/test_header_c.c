@@ -65,6 +65,13 @@ int main(void) {
         lag.struct_size = (uint32_t)sizeof(echoir_lag);
         EXPECT(echoir_session_read_lag(NULL, &lag) == NULL_SESSION_STATUS);
     }
+    {
+        int32_t state = -1;
+        EXPECT(echoir_session_capture_state(NULL, &state) == NULL_SESSION_STATUS);
+        EXPECT(echoir_last_status() == NULL_SESSION_STATUS);
+        EXPECT(ECHOIR_CAPTURE_OFF == 0 && ECHOIR_CAPTURE_LIVE == 1 && ECHOIR_CAPTURE_WAITING == 2 &&
+               ECHOIR_CAPTURE_ENDED == 3);
+    }
 
     /* A session params struct from a newer header is refused, and so is an unknown policy. Both
        are checked before the engine, so they fail here with no engine. */

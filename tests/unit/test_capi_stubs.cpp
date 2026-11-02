@@ -96,6 +96,24 @@ TEST_CASE("session create refuses NULL params before it looks at the engine") {
     }
     CHECK(echoir_session_create(nullptr, nullptr, nullptr, nullptr) == nullptr);
     CHECK(std::string(echoir_last_error()).find("params must not be NULL") != std::string::npos);
+    CHECK(echoir_last_status() == ECHOIR_ERR_INVALID_ARG);
+}
+
+TEST_CASE("session create with a NULL engine gives its status through last status") {
+    const echoir_session_params sp = default_session_params();
+    CHECK(echoir_session_create(nullptr, &sp, nullptr, nullptr) == nullptr);
+    // Without the engine the call is a stub that reports NOT_IMPLEMENTED.
+    const bool not_built = std::string(echoir_last_error()).find("not built") != std::string::npos;
+    CHECK(echoir_last_status() ==
+          (not_built ? ECHOIR_ERR_NOT_IMPLEMENTED : ECHOIR_ERR_INVALID_ARG));
+}
+
+TEST_CASE("capture state rejects a NULL session") {
+    int32_t state = -1;
+    CHECK(echoir_session_capture_state(nullptr, &state) != ECHOIR_OK);
+    CHECK(std::string(echoir_last_error()).find("echoir_session_capture_state") !=
+          std::string::npos);
+    CHECK(state == -1);
 }
 
 TEST_CASE("session create refuses a struct_size larger than echoir_session_params") {
@@ -183,6 +201,31 @@ TEST_CASE("free functions accept NULL") {
     echoir_engine_free(nullptr);
     echoir_session_free(nullptr);
     CHECK(true);  // reaching this line means neither call crashed
+}
+
+TEST_CASE("last status starts at OK, follows each failure and is thread-local") {
+    echoir_session_start(nullptr);
+    const echoir_status mine = echoir_last_status();
+    CHECK(mine != ECHOIR_OK);
+
+    echoir_status before = ECHOIR_ERR_INTERNAL;
+    echoir_status after_init = ECHOIR_OK;
+    echoir_status after_ok = ECHOIR_OK;
+    std::thread worker([&] {
+        before = echoir_last_status();
+        echoir_engine_params_init(nullptr);
+        after_init = echoir_last_status();
+        // A call that succeeds leaves the last status as it was.
+        echoir_session_params sp{};
+        echoir_session_params_init(&sp);
+        after_ok = echoir_last_status();
+    });
+    worker.join();
+
+    CHECK(before == ECHOIR_OK);
+    CHECK(after_init == ECHOIR_ERR_INVALID_ARG);
+    CHECK(after_ok == ECHOIR_ERR_INVALID_ARG);
+    CHECK(echoir_last_status() == mine);
 }
 
 TEST_CASE("last error is thread-local") {

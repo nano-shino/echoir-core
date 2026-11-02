@@ -58,6 +58,24 @@ public sealed record TranscriberOptions
     public string? TapeTrack { get; init; }
 }
 
+// The state of a capture (echoir.h, echoir_capture_state).
+public enum CaptureState
+{
+    // No device is captured: not running, or the Push source.
+    Off = 0,
+
+    // The device is open and its audio is transcribed.
+    Live = 1,
+
+    // The default device was lost and none has come back for a second or more, such as when the
+    // only headset is unplugged. The capture resumes by itself when a device appears.
+    Waiting = 2,
+
+    // The capture ended by itself: the chosen device was lost (Error is raised with DeviceLost)
+    // or the capture failed. It stays so until StopAsync.
+    Ended = 3,
+}
+
 // An error from the session, such as a lost device. DeviceLost is true for "device_lost".
 public sealed class TranscriberErrorEventArgs : EventArgs
 {
