@@ -32,8 +32,10 @@ public:
 
     // Creates or replaces path and writes the two header pages. pre_skip is in 48 kHz samples,
     // input_rate is the original sample rate for the header, and first_packet is the number of the
-    // first packet added, so the granule positions continue a longer stream. Throws
-    // std::runtime_error when the file cannot be written.
+    // first packet added, which numbers the pages (OggPageRef) in the stream they belong to. The
+    // granule positions count from that packet, so a file holding packets from a longer stream
+    // still starts at 0 and plays from its own start. Throws std::runtime_error when the file
+    // cannot be written.
     OggOpusWriter(const std::filesystem::path& path, std::uint32_t serial, std::uint16_t pre_skip,
                   std::uint32_t input_rate, std::int64_t frame_samples_48k,
                   std::int64_t first_packet, const std::string& vendor);
@@ -60,7 +62,8 @@ private:
     std::uint32_t serial_;
     std::uint32_t sequence_ = 0;
     std::int64_t frame_samples_48k_;
-    std::int64_t next_packet_;  // number of the next packet added
+    std::int64_t first_packet_;  // number of the first packet added: the granule origin
+    std::int64_t next_packet_;   // number of the next packet added
     std::vector<std::uint8_t> body_;
     std::vector<std::uint8_t> lacing_;
     std::int32_t buffered_ = 0;  // packets in body_

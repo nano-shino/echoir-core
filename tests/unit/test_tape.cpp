@@ -182,6 +182,7 @@ std::uint32_t crc_bitwise(const std::vector<std::uint8_t>& bytes) {
 
 struct OggFile {
     std::vector<std::vector<std::uint8_t>> packets;  // every packet, headers first
+    std::vector<std::int64_t> granules;              // the granule position of every page
     std::int64_t last_granule = -1;
     bool bos_first = false;
     bool eos_last = false;
@@ -236,6 +237,7 @@ OggFile parse_ogg(const std::filesystem::path& path) {
                 packet.clear();
             }
         }
+        f.granules.push_back(granule);
         f.last_granule = granule;
         at += page_size;
     }
@@ -318,6 +320,40 @@ TEST_CASE("tape: memory-to-page handoff at the 2 min boundary") {
     check_close(across, slice(s16, kMinute - 1000, kMinute + 2000));
     CHECK(std::equal(across.end() - 1000 * kSpm, across.end(),
                      s16.begin() + (kMinute + 1000) * kSpm));
+}
+
+TEST_CASE("tape: each page file starts its own timeline, and the joined file runs on") {
+    TempFolder dir;
+    auto tape = Tape::create(dir.path);
+    const std::vector<float> pcm = voice(3 * kMinute * kSpm + 10 * kSpm, 3);
+    const std::vector<std::int16_t> s16 = to_s16(pcm);
+    auto rig = std::make_unique<Rig>(tape, "mic");
+    rig->push(pcm);
+    // Granules count 48 kHz samples from the page file's own first packet. A page holds 50
+    // packets of 20 ms, so a full page file ends at 60 s of audio, not at its place on the tape.
+    constexpr std::int64_t kPageGranules = 60 * 48000;
+    REQUIRE(on_disk(dir.path / "mic.00001.opus"));
+    CHECK(parse_ogg(dir.path / "mic.00001.opus").last_granule == kPageGranules);
+    // A player drops the pre-skip (about 6 ms), so the page plays for a minute less that much.
+    const auto length = static_cast<std::int64_t>(play(dir.path / "mic.00001.opus").size());
+    CHECK(std::abs(length - kMinute * kSpm) <= 10 * kSpm);
+    // The reads still place the audio at its time on the tape.
+    check_close(read(*tape, "mic", kMinute + 5000, kMinute + 6000),
+                slice(s16, kMinute + 5000, kMinute + 6000));
+
+    rig.reset();
+    tape->close();
+    // The joined file's granules rise page by page: each page holds 1 s of packets, and only the
+    // last page is trimmed to the track's end.
+    const OggFile joined = parse_ogg(dir.path / "mic.opus");
+    REQUIRE(joined.granules.size() > 3);
+    for (std::size_t i = 2; i + 1 < joined.granules.size(); ++i) {
+        CHECK(joined.granules[i] == static_cast<std::int64_t>(i - 1) * 48000);
+    }
+    for (std::size_t i = 3; i < joined.granules.size(); ++i) {
+        CHECK(joined.granules[i] > joined.granules[i - 1]);
+    }
+    CHECK(play(dir.path / "mic.opus").size() == s16.size());
 }
 
 TEST_CASE("tape: a read across a page edge decodes both pages in time") {

@@ -78,6 +78,7 @@ OggOpusWriter::OggOpusWriter(const std::filesystem::path& path, std::uint32_t se
       out_(path, std::ios::binary | std::ios::trunc),
       serial_(serial),
       frame_samples_48k_(frame_samples_48k),
+      first_packet_(first_packet),
       next_packet_(first_packet) {
     if (!out_) {
         throw std::runtime_error("cannot create " + path.filename().string());
@@ -133,7 +134,7 @@ void OggOpusWriter::finish(std::int64_t end_granule) {
 void OggOpusWriter::flush_audio(bool last, std::int64_t end_granule) {
     const std::int64_t first = next_packet_;
     next_packet_ += buffered_;
-    std::int64_t granule = next_packet_ * frame_samples_48k_;
+    std::int64_t granule = (next_packet_ - first_packet_) * frame_samples_48k_;
     if (last && end_granule >= 0) {
         granule = end_granule;
     }
