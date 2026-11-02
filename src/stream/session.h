@@ -175,6 +175,13 @@ public:
     // same time. Thread-safe. Throws nothing. Not from a sink.
     void report_error(const std::string& message) noexcept;
 
+    // Marks a place on the timeline where time was left out, such as a long capture gap. With a
+    // tape, the session's run ends there and a new one starts where its track ends, with no
+    // padding, so tape_offset_ms() does not move and session time still maps to tape time.
+    // Without a tape it does nothing. Audio pushed before the call goes before the seam.
+    // Thread-safe, like push().
+    void mark_seam();
+
     // While muted, the audio of push() is replaced by silence of the same length after conversion,
     // so the VAD ends the ongoing segment and timestamps keep running. Thread-safe.
     void set_input_muted(bool muted) noexcept { input_muted_.store(muted); }

@@ -294,6 +294,13 @@ void Session::push(std::span<const float> interleaved, std::int32_t sample_rate,
     wake_worker();
 }
 
+void Session::mark_seam() {
+    std::lock_guard<std::mutex> audio(audio_mu_);
+    if (tape_writer_) {
+        tape_writer_->seam();
+    }
+}
+
 void Session::process() {
     refuse_from_sink("process");
     std::lock_guard<std::mutex> decode(decode_mu_);

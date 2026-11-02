@@ -1,5 +1,6 @@
-// The session tape: memory and Opus pages, reads by range across both, seams between sessions,
-// several tracks, the envelope, the joined files of close(), and the C ABI. Sessions run on the
+// The session tape: memory and Opus pages, reads by range across both, seams between sessions
+// and inside one, several tracks, the envelope, the joined files of checkpoint() and close(), and
+// the C ABI. Sessions run on the
 // scripted backend and VAD from tests/support/live_fakes.h, pulled, so a push stores at once.
 #include <opus.h>
 
@@ -612,6 +613,149 @@ TEST_CASE("tape: close writes a playable <track>.opus for each track") {
     CHECK(tracks(*tape)["closed"] == true);
 }
 
+TEST_CASE("tape: a checkpoint writes a playable file mid-session, and recording goes on") {
+    TempFolder dir;
+    auto tape = Tape::create(dir.path);
+    Rig rig(tape, "mic");
+    // Three minutes and a bit: one page file, the rest in memory.
+    const std::int64_t first = 3 * kMinute * kSpm + 1234 * kSpm + 7;
+    const std::int64_t second = 130000 * kSpm + 3;
+    const std::vector<float> a = voice(first, 1);
+    const std::vector<float> b = voice(second, 1, first);
+    rig.push(a);
+    const auto before = read(*tape, "mic", 0, kAll);
+
+    tape->checkpoint();
+    CHECK(on_disk(dir.path / "mic.opus"));
+    CHECK(on_disk(dir.path / "mic.00001.opus"));
+    CHECK_FALSE(on_disk(dir.path / "mic.opus.part"));
+    const auto a_s16 = to_s16(a);
+    {
+        const auto played = play(dir.path / "mic.opus");
+        // The whole track so far, the paged part and the part in memory, in time.
+        REQUIRE(played.size() == a_s16.size());
+        check_close(
+            std::vector<std::int16_t>(played.begin() + 1000 * kSpm, played.begin() + 31000 * kSpm),
+            slice(a_s16, 1000, 31000), 1);
+        check_close(std::vector<std::int16_t>(played.end() - 20000 * kSpm, played.end()),
+                    std::vector<std::int16_t>(a_s16.end() - 20000 * kSpm, a_s16.end()), 1);
+    }
+    // The tape itself did not change: the same reads, the newest 2 minutes still exact.
+    CHECK(read(*tape, "mic", 0, kAll) == before);
+    CHECK(read(*tape, "mic", 3 * kMinute, 3 * kMinute + 1234) ==
+          slice(a_s16, 3 * kMinute, 3 * kMinute + 1234));
+    CHECK(tracks(*tape)["closed"] == false);
+
+    // Recording goes on, and a later checkpoint replaces the file with the longer track.
+    rig.push(b);
+    tape->checkpoint();
+    std::vector<std::int16_t> all_s16 = a_s16;
+    const auto b_s16 = to_s16(b);
+    all_s16.insert(all_s16.end(), b_s16.begin(), b_s16.end());
+    CHECK(play(dir.path / "mic.opus").size() == all_s16.size());
+
+    // The tape stays gapless across the first checkpoint: the reads there, now from the pages,
+    // follow the signal with no shift.
+    const std::int64_t at_ms = first / kSpm;
+    check_close(read(*tape, "mic", at_ms - 2000, at_ms + 2000),
+                slice(all_s16, at_ms - 2000, at_ms + 2000));
+
+    // The close writes the final file over the checkpoint, gapless across both checkpoints.
+    rig.session.reset();
+    tape->close();
+    const auto played = play(dir.path / "mic.opus");
+    REQUIRE(played.size() == all_s16.size());
+    check_close(std::vector<std::int16_t>(played.begin() + (at_ms - 2000) * kSpm,
+                                          played.begin() + (at_ms + 2000) * kSpm),
+                slice(all_s16, at_ms - 2000, at_ms + 2000), 1);
+    std::vector<std::string> left;
+    for (const auto& entry : std::filesystem::directory_iterator(dir.path)) {
+        left.push_back(entry.path().filename().string());
+    }
+    CHECK(left == std::vector<std::string>{"mic.opus"});
+
+    // After the close, and on a tape without a folder, a checkpoint does nothing.
+    CHECK_NOTHROW(tape->checkpoint());
+    auto memory = Tape::create({});
+    Rig m(memory, "mic");
+    m.push(voice(1000 * kSpm, 2));
+    CHECK_NOTHROW(memory->checkpoint());
+}
+
+TEST_CASE("tape: a checkpoint of short tracks, padding and an empty track") {
+    TempFolder dir;
+    auto tape = Tape::create(dir.path);
+    tape->add_track("empty", "");
+    const std::vector<float> mic = voice(2500 * kSpm + 5, 1);
+    const std::vector<float> sys = voice(4000 * kSpm, 2);
+    {
+        Rig m(tape, "mic");
+        m.push(mic);
+    }
+    Rig s(tape, "system");
+    s.push(sys);
+    tape->checkpoint();
+    // No page file yet: the whole file comes from memory. The empty track gets no file.
+    CHECK_FALSE(on_disk(dir.path / "empty.opus"));
+    const auto mic_s16 = to_s16(mic);
+    const auto sys_s16 = to_s16(sys);
+    const auto mic_played = play(dir.path / "mic.opus");
+    REQUIRE(mic_played.size() == mic.size());
+    check_close(std::vector<std::int16_t>(mic_played.begin() + 100 * kSpm, mic_played.end()),
+                std::vector<std::int16_t>(mic_s16.begin() + 100 * kSpm, mic_s16.end()), 1);
+    // The system track starts after the mic's run, padded with silence before it.
+    const std::int64_t offset = s.session->tape_offset_ms();
+    CHECK(offset == 2510);
+    const auto sys_played = play(dir.path / "system.opus");
+    REQUIRE(sys_played.size() == static_cast<std::size_t>(offset * kSpm) + sys.size());
+    CHECK(max_abs(std::vector<std::int16_t>(sys_played.begin(),
+                                            sys_played.begin() + (offset - 20) * kSpm)) < 64);
+    check_close(
+        std::vector<std::int16_t>(sys_played.begin() + (offset + 100) * kSpm, sys_played.end()),
+        std::vector<std::int16_t>(sys_s16.begin() + 100 * kSpm, sys_s16.end()), 1);
+}
+
+TEST_CASE("tape: a seam keeps the writer's place and starts a new run") {
+    auto tape = Tape::create({});
+    const std::vector<float> a = voice(1005 * kSpm, 1);
+    const std::vector<float> b = voice(2000 * kSpm, 2);
+    Rig other(tape, "system");
+    other.push(voice(5000 * kSpm, 3));
+    Rig rig(tape, "mic");
+    const std::int64_t offset = rig.session->tape_offset_ms();
+    CHECK(offset == 5000);
+    // A seam before any audio is not a run of its own.
+    rig.session->mark_seam();
+    rig.push(a);
+    rig.session->mark_seam();
+    rig.session->mark_seam();
+    rig.push(b);
+    // No padding: the offset stays, and the session reads its audio back to back.
+    CHECK(rig.session->tape_offset_ms() == offset);
+    auto both = to_s16(a);
+    const auto b_s16 = to_s16(b);
+    both.insert(both.end(), b_s16.begin(), b_s16.end());
+    CHECK(read(*rig.session, 0, kAll) == both);
+    CHECK(read(*tape, "mic", offset, kAll) == both);
+    const auto runs = tracks(*tape)["tracks"][1]["runs"];
+    REQUIRE(runs.size() == 2);
+    CHECK(runs[0]["start_ms"] == 5000);
+    CHECK(runs[0]["end_ms"] == 6005);
+    CHECK(runs[1]["start_ms"] == 6005);
+    CHECK(runs[1]["end_ms"] == 8005);
+
+    // Without a tape, a seam does nothing.
+    ts::LiveBackend backend;
+    ts::LiveVad vad;
+    SessionConfig config;
+    config.retain_audio_ms = 10000;
+    Session plain(backend, vad, config, [](const SessionEvent&) {});
+    plain.push(std::span<const float>(a.data(), a.size()), 16000, 1);
+    plain.mark_seam();
+    plain.push(std::span<const float>(b.data(), b.size()), 16000, 1);
+    CHECK(read(plain, 0, kAll) == both);
+}
+
 TEST_CASE("tape: without a folder only the newest 2 minutes are kept") {
     auto tape = Tape::create({});
     Rig rig(tape, "mic");
@@ -695,7 +839,12 @@ TEST_CASE("tape: the C ABI") {
     CHECK(echoir_tape_read_peaks(tape, "mic", 0, kAll, 10, nullptr, 0, &n) == ECHOIR_OK);
     CHECK(n == 0);
 
+    CHECK(echoir_tape_checkpoint(tape) == ECHOIR_OK);  // no audio: no file
+    CHECK_FALSE(std::filesystem::exists(dir.path / "sub" / "mic.opus"));
+    CHECK(echoir_tape_checkpoint(nullptr) == ECHOIR_ERR_INVALID_ARG);
+
     CHECK(echoir_tape_close(tape) == ECHOIR_OK);
+    CHECK(echoir_tape_checkpoint(tape) == ECHOIR_OK);
     CHECK(echoir_tape_add_track(tape, "late", nullptr) == ECHOIR_ERR_STATE);
     echoir_tape_free(tape);
     echoir_tape_free(nullptr);

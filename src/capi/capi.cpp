@@ -878,6 +878,11 @@ echoir_status echoir_tape_read_peaks(echoir_tape* t, const char* track, int64_t 
     });
 }
 
+echoir_status echoir_tape_checkpoint(echoir_tape* t) {
+    return run_tape_call(t, "echoir_tape_checkpoint",
+                         [](echoir::stream::Tape& tape) { tape.checkpoint(); });
+}
+
 echoir_status echoir_tape_close(echoir_tape* t) {
     return run_tape_call(t, "echoir_tape_close", [](echoir::stream::Tape& tape) { tape.close(); });
 }

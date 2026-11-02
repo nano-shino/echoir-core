@@ -12,7 +12,8 @@ public readonly record struct TapeRun(long StartMs, long EndMs);
 public sealed record TapeTrack(
     string Name,
     string Label,
-    // The joined file of the track in the folder, written by CloseAsync; empty without a folder.
+    // The joined file of the track in the folder, written by CheckpointAsync and CloseAsync; empty
+    // without a folder.
     string File,
     long DurationMs,
     // True while a transcriber writes the track.
@@ -25,7 +26,8 @@ public sealed record TapeTrack(
 // (echoir.h, echoir_tape_*). Give it to TranscriberOptions.Tape, and every run writes its audio to
 // a track of the tape, on one timeline: a later run starts at the end of the tape. The newest
 // 2 minutes of each track stay in memory; with a folder, older audio goes there as Opus pages, and
-// CloseAsync joins them into <track>.opus. Without a folder only the newest 2 minutes are kept.
+// CloseAsync joins them into <track>.opus. CheckpointAsync writes that file while the tape stays
+// open. Without a folder only the newest 2 minutes are kept.
 //
 // Errors: audio that is missing (an unknown track, a range past the end, or audio no longer kept)
 // is false or empty, never an exception. Bad arguments throw ArgumentOutOfRangeException, or
@@ -205,6 +207,23 @@ public sealed class EchoirTape : IDisposable, IAsyncDisposable
             peaks[i] = new Peak(raw[2 * i], raw[2 * i + 1]);
         }
         return peaks;
+    }
+
+    // With a folder, writes <track>.opus for every track that has audio, on a thread pool thread: a
+    // complete, playable file of everything recorded so far, while the tape stays open and runs keep
+    // writing it. The tape's own pages, memory and reads do not change, and later audio continues
+    // each track with no gap; a later checkpoint or CloseAsync replaces the file. Each call copies
+    // the page files and encodes at most the newest 2 minutes. Does nothing without a folder or
+    // after CloseAsync. Fails with an EchoirException when a file cannot be written (such as one
+    // another program holds open); the other tracks are still written.
+    public Task CheckpointAsync()
+    {
+        return Task.Run(() =>
+        {
+            using Lease lease = Lease.Take(_handle);
+            int status = NativeMethods.TapeCheckpoint(lease.Handle);
+            EchoirException.ThrowIfFailed(status, "echoir_tape_checkpoint");
+        });
     }
 
     // Ends the tape, on a thread pool thread: transcribers still running go on but their audio is no

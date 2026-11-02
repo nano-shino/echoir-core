@@ -97,7 +97,7 @@ the JSON text that the library returns.
 
 - Times are `int64_t` milliseconds. They count from session start, or from the last
   `echoir_session_reset()`. For a captured session, they follow the wall clock from the start of the
-  capture.
+  capture, except across a capture gap longer than 5 seconds (see Capture).
 - Sample rates are `int32_t` values in hertz. Any positive rate is accepted.
 - `channels` is a positive count. Samples are interleaved, so a frame holds `channels` samples.
 - `n_frames` counts frames, not samples.
@@ -482,7 +482,9 @@ input (for example `mic` and `system`), on one timeline that starts at 0.
   `echoir_session_create()` with the reason in the last error.
 - **Seams.** A session starts at the end of the tape, which is its longest track rounded up to whole
   10 ms. The time between two sessions is therefore not stored: their runs meet at a seam.
-  `echoir_session_reset()` ends the session's run and starts a new one in the same way.
+  `echoir_session_reset()` ends the session's run and starts a new one in the same way. A capture gap
+  longer than 5 seconds also ends the run: the next one starts where the track ends, with no padding,
+  so the session's offset on the tape stays the same (see Capture).
 - **Several tracks.** Several sessions can write several tracks at the same time. A track that is
   behind the end of the tape when a session starts on it is padded with silence up to there, so all
   tracks keep one timeline.
@@ -505,12 +507,23 @@ input (for example `mic` and `system`), on one timeline that starts at 0.
 ```c
 echoir_tape*  echoir_tape_create(const char* folder);
 void          echoir_tape_free(echoir_tape* tape);
+echoir_status echoir_tape_checkpoint(echoir_tape* tape);
 echoir_status echoir_tape_close(echoir_tape* tape);
 ```
 
 `echoir_tape_create()` makes a tape whose files go to `folder` (UTF-8), which is created when it is
 missing. NULL or `""` keeps the audio in memory only. Files of the same names in the folder are
 replaced. It returns NULL on failure.
+
+`echoir_tape_checkpoint()` writes `<track>.opus` for every track that has audio while the tape stays
+open: a complete, standard Ogg Opus file of everything the track holds so far. The page files are
+copied into it and the audio still in memory is encoded for it, on a copy of the track's encoder, so
+the tape's own pages, memory and reads do not change and audio written later continues the track with
+no gap. A later checkpoint or the close replaces the file. Call it when the audio so far should be safe
+on disk as one file, such as when recording stops. Each call copies the page files and encodes at most
+the newest 2 minutes, so run it off the UI thread. Without a folder, or after the close, it does
+nothing. It returns `ECHOIR_ERR_INTERNAL` when a file cannot be written, such as one another program
+holds open; the other tracks are still written.
 
 `echoir_tape_close()` ends the tape. Sessions that still write it go on, but their audio is no longer
 kept. With a folder, the rest of each track is encoded and the pages are joined into `<track>.opus`; a
@@ -542,7 +555,7 @@ echoir_status echoir_tape_duration_ms(echoir_tape* tape, int64_t* out_ms);
 ```
 
 `file` is the name of the track's joined file in the folder (`""` without a folder); it exists after
-`echoir_tape_close()`. `writing` is true while a session writes the track. `runs` are the stretches
+`echoir_tape_checkpoint()` or `echoir_tape_close()`. `writing` is true while a session writes the track. `runs` are the stretches
 that sessions wrote, in order, so the seams are between them. A track has an `error` field only when a
 page file could not be written: the audio then stays in memory and the write is tried again when the
 next minute has filled.
@@ -608,6 +621,17 @@ It returns `ECHOIR_ERR_INVALID_ARG` for a `source` value that is not declared in
 `ECHOIR_ERR_STATE` when the session already captures its own audio. The push functions return
 `ECHOIR_ERR_STATE` while the session captures. Loopback on a backend without loopback returns
 `ECHOIR_ERR_NOT_IMPLEMENTED`. An unknown `device_id` returns `ECHOIR_ERR_INVALID_ARG`.
+
+Timestamps follow the wall clock from the start of the capture. When the device sends nothing for a
+moment (loopback while no sound plays, or a lost default device), silence is pushed for the time that
+passed, up to 5 seconds per gap: enough for the VAD to end the open segment. The rest of a longer gap,
+such as a quiet loopback for minutes or a system sleep, is left off the timeline. No silence is pushed,
+decoded or stored for it, so a wake from sleep costs at most 5 seconds of work, and later timestamps
+are that much earlier than the wall clock. With a tape, the audio after such a gap starts a new run of
+the session's track where the track ends, so the gap shows as a seam in `echoir_tape_tracks_json()`.
+`echoir_session_tape_offset_ms()` does not change, so session time `t` is still tape time
+`offset + t`. The track is not padded, so tracks that other sessions write at the same time no longer
+line up after such a gap until a session attaches again.
 
 If the chosen device is lost, an ERROR event with `detail` set to `"device_lost"` is sent, and the
 capture ends. The session keeps running until it is stopped. If the default device is lost, the capture

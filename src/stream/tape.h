@@ -13,9 +13,10 @@
 // is encoded with Opus (kBitrate, 20 ms frames, one continuous stream per track) and written to the
 // folder as Ogg Opus page files of kPageMs each, as each one fills, so a crash loses at most the
 // page being filled. Without a folder, older audio is dropped. close() joins each track's pages
-// into one <track>.opus file and deletes the page files. Reads by time range come from memory or
-// from the pages, decoding only the pages they need. The 10 ms level envelope covers the whole
-// tape. File IO uses the C++ standard library only.
+// into one <track>.opus file and deletes the page files. checkpoint() writes that file while the
+// tape stays open, so everything recorded so far is on disk in one playable file. Reads by time
+// range come from memory or from the pages, decoding only the pages they need. The 10 ms level
+// envelope covers the whole tape. File IO uses the C++ standard library only.
 //
 // Thread-safe: every call may run on any thread.
 #pragma once
@@ -87,6 +88,15 @@ public:
                            std::int64_t bucket_ms, float* out, std::size_t cap,
                            std::int64_t limit_cells = INT64_MAX) const;
 
+    // With a folder, writes <track>.opus for every track that has audio: a complete Ogg Opus file
+    // of the whole track so far, while the tape stays open. The page files are copied into it, and
+    // the audio still in memory is encoded on a copy of the track's encoder, so the track's own
+    // stream, its memory and its reads are unchanged, and later audio continues it with no gap. A
+    // later checkpoint or close() replaces the file. Each call copies the page files and encodes
+    // at most the newest kMemoryMs. Without a folder, or after close(), does nothing. Throws
+    // std::runtime_error when a file cannot be written; the other tracks are still written.
+    void checkpoint();
+
     // Ends the tape: no more writes, and with a folder, the rest of each track is encoded and its
     // pages are joined into <track>.opus. Later reads come from that file. Without a folder the
     // audio is dropped and only the envelope stays. A second call does nothing. Throws
@@ -109,6 +119,11 @@ public:
         void append(std::span<const float> pcm);
         // Ends this run and starts a new one at the end of the tape, as a new attach does.
         void restart();
+        // Ends this run and starts a new one where the track ends now, with no padding, so the
+        // writer's audio keeps its place on the tape (start_samples() does not move). For a stretch
+        // of time the writer leaves out, such as a long capture gap. Does nothing when the current
+        // run is still empty.
+        void seam();
         // Where this run starts on the tape, in samples (a whole number of 10 ms).
         std::int64_t start_samples() const noexcept;
         const std::string& track() const noexcept;
@@ -142,6 +157,8 @@ private:
     // Held shared while page files are read, and exclusively by close(), which replaces them.
     // Taken before mu_ and before any track lock.
     mutable std::shared_mutex files_mu_;
+    // One checkpoint at a time, as they write the same files. Taken before files_mu_.
+    std::mutex checkpoint_mu_;
     std::vector<std::unique_ptr<Track>> tracks_;
     bool closed_ = false;
 };

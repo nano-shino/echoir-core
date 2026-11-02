@@ -4,9 +4,12 @@
 
 #include <algorithm>
 #include <cstdio>
+#include <cstdlib>
+#include <cstring>
 #include <deque>
 #include <fstream>
 #include <limits>
+#include <new>
 #include <stdexcept>
 #include <system_error>
 #include <utility>
@@ -53,6 +56,19 @@ EncoderPtr make_encoder() {
     }
     opus_encoder_ctl(enc.get(), OPUS_SET_BITRATE(Tape::kBitrate));
     return enc;
+}
+
+// A copy of an encoder's whole state, so it can go on from where the original is without
+// changing it. The state is one position-independent block (see opus.h), and
+// opus_encoder_destroy() frees it with free().
+EncoderPtr copy_encoder(const OpusEncoder* enc) {
+    const auto size = static_cast<std::size_t>(opus_encoder_get_size(1));
+    void* copy = std::malloc(size);
+    if (copy == nullptr) {
+        throw std::bad_alloc();
+    }
+    std::memcpy(copy, enc, size);
+    return EncoderPtr(static_cast<OpusEncoder*>(copy));
 }
 
 std::vector<std::uint8_t> encode(OpusEncoder* enc, const std::int16_t* frame) {
@@ -234,15 +250,24 @@ struct Tape::Track {
         }
     }
 
-    // Encodes the frame of input [fed, fed + kFrame). Its packet decodes to output
-    // [fed, fed + kFrame), which is input [fed - lookahead, fed + kFrame - lookahead), so the frame
-    // is silence when a hole covers both ranges. Samples past the end are silence (close()).
+    // True when the frame of input [at, at + kFrame) is padding only. Its packet decodes to output
+    // [at, at + kFrame), which is input [at - lookahead, at + kFrame - lookahead), so a hole must
+    // cover both ranges.
+    static bool in_hole(const std::deque<std::pair<std::int64_t, std::int64_t>>& holes,
+                        std::int64_t at, std::int64_t lookahead) {
+        for (const auto& [from, to] : holes) {
+            if (from <= at - lookahead && at + kFrame <= to) return true;
+            if (from > at - lookahead) break;
+        }
+        return false;
+    }
+
+    // Encodes the frame of input [fed, fed + kFrame). Samples past the end are silence (close()).
     void encode_frame(bool write_pages) {
         while (!holes.empty() && holes.front().second <= fed - lookahead) {
             holes.pop_front();
         }
-        if (!holes.empty() && holes.front().first <= fed - lookahead &&
-            fed + kFrame <= holes.front().second) {
+        if (in_hole(holes, fed, lookahead)) {
             open.push_back(silence_packet());
         } else {
             std::int16_t frame[kFrame];
@@ -281,6 +306,38 @@ struct Tape::Track {
             std::error_code ec;
             std::filesystem::remove(path, ec);
         }
+    }
+
+    // Writes path as one Ogg Opus file of the whole track: the packets of files, then those of
+    // open and tail, with the last page trimmed to end_granule. Returns its audio pages. Runs
+    // without the track's lock; the caller keeps the files from being replaced.
+    std::vector<audio::OggPageRef> write_joined(
+        const std::filesystem::path& path, const std::vector<File>& from,
+        const std::vector<std::vector<std::uint8_t>>& open_packets,
+        const std::vector<std::vector<std::uint8_t>>& tail, std::int64_t end_granule) const {
+        audio::OggOpusWriter w(path, serial, pre_skip(), kRate, kFrame48k, 0, vendor());
+        std::vector<std::vector<std::uint8_t>> packets;
+        for (const auto& f : from) {
+            std::ifstream in(f.path, std::ios::binary);
+            if (!in) {
+                throw std::runtime_error("cannot open " + f.path.filename().string());
+            }
+            for (const auto& page : f.pages) {
+                packets.clear();
+                audio::read_ogg_packets(in, page.offset, packets);
+                for (const auto& packet : packets) {
+                    w.add_packet(packet);
+                }
+            }
+        }
+        for (const auto& packet : open_packets) {
+            w.add_packet(packet);
+        }
+        for (const auto& packet : tail) {
+            w.add_packet(packet);
+        }
+        w.finish(end_granule);
+        return w.pages();
     }
 
     // The packets a read needs, taken under the lock and fetched without it.
@@ -455,6 +512,16 @@ void Tape::Writer::restart() {
     start_.store(tape_->begin_run(*track_));
 }
 
+void Tape::Writer::seam() {
+    std::lock_guard<std::mutex> lock(track_->mu);
+    if (track_->sealed || track_->runs.empty()) {
+        return;
+    }
+    if (track_->runs.back().second > track_->runs.back().first) {
+        track_->runs.emplace_back(track_->total, track_->total);
+    }
+}
+
 std::size_t Tape::read_peaks(const std::string& name, std::int64_t start_ms, std::int64_t end_ms,
                              std::int64_t bucket_ms, float* out, std::size_t cap,
                              std::int64_t limit_cells) const {
@@ -580,6 +647,81 @@ std::size_t Tape::read_audio(const std::string& name, std::int64_t start_ms, std
     return count;
 }
 
+void Tape::checkpoint() {
+    std::lock_guard<std::mutex> one(checkpoint_mu_);
+    // Held shared, so close() cannot replace the page files while they are copied.
+    std::shared_lock<std::shared_mutex> files(files_mu_);
+    std::vector<Track*> tracks;
+    {
+        std::lock_guard<std::mutex> lock(mu_);
+        if (closed_ || folder_.empty()) {
+            return;
+        }
+        for (const auto& t : tracks_) {
+            tracks.push_back(t.get());
+        }
+    }
+    std::string first_error;
+    for (Track* t : tracks) {
+        // What the file needs, taken under the lock: the page files, the packets not in one yet,
+        // the encoder as it is, and the samples it has not encoded. The rest runs without the
+        // lock, so a writer appending meanwhile waits only for these copies.
+        std::vector<Track::File> from;
+        std::vector<std::vector<std::uint8_t>> open_packets;
+        EncoderPtr enc;
+        std::deque<std::pair<std::int64_t, std::int64_t>> holes;
+        std::vector<std::int16_t> unencoded;
+        std::int64_t fed = 0;
+        std::int64_t total = 0;
+        {
+            std::lock_guard<std::mutex> tl(t->mu);
+            if (!t->enc || t->sealed || t->total == 0) {
+                continue;
+            }
+            from = t->files;
+            open_packets = t->open;
+            enc = copy_encoder(t->enc.get());
+            holes = t->holes;
+            fed = t->fed;
+            total = t->total;
+            unencoded.resize(static_cast<std::size_t>(total - fed));
+            for (std::int64_t n = fed; n < total; ++n) {
+                unencoded[static_cast<std::size_t>(n - fed)] = t->sample_at(n);
+            }
+        }
+        const std::filesystem::path final_path = folder_ / (t->stem + ".opus");
+        const std::filesystem::path part_path = folder_ / (t->stem + ".opus.part");
+        try {
+            // The unencoded samples, then silence until the encoder's delay is out, as close()
+            // ends the track, but on the copy of the encoder.
+            std::vector<std::vector<std::uint8_t>> tail;
+            for (std::int64_t at = fed; at < total + t->lookahead; at += kFrame) {
+                if (Track::in_hole(holes, at, t->lookahead)) {
+                    tail.push_back(silence_packet());
+                    continue;
+                }
+                std::int16_t frame[kFrame];
+                for (std::int64_t i = 0; i < kFrame; ++i) {
+                    const std::int64_t n = at + i;
+                    frame[i] = n < total ? unencoded[static_cast<std::size_t>(n - fed)] : 0;
+                }
+                tail.push_back(encode(enc.get(), frame));
+            }
+            t->write_joined(part_path, from, open_packets, tail, 3 * (t->lookahead + total));
+            std::filesystem::rename(part_path, final_path);
+        } catch (const std::exception& e) {
+            std::error_code ec;
+            std::filesystem::remove(part_path, ec);
+            if (first_error.empty()) {
+                first_error = t->name + ": " + e.what();
+            }
+        }
+    }
+    if (!first_error.empty()) {
+        throw std::runtime_error("cannot write the checkpoint file of " + first_error);
+    }
+}
+
 void Tape::close() {
     std::unique_lock<std::shared_mutex> files(files_mu_);
     std::lock_guard<std::mutex> lock(mu_);
@@ -608,33 +750,15 @@ void Tape::close() {
             while (t->fed < t->total + t->lookahead) {
                 t->encode_frame(false);
             }
-            audio::OggOpusWriter w(part_path, t->serial, t->pre_skip(), kRate, kFrame48k, 0,
-                                   t->vendor());
-            std::vector<std::vector<std::uint8_t>> packets;
-            for (const auto& f : t->files) {
-                std::ifstream in(f.path, std::ios::binary);
-                if (!in) {
-                    throw std::runtime_error("cannot open " + f.path.filename().string());
-                }
-                for (const auto& page : f.pages) {
-                    packets.clear();
-                    audio::read_ogg_packets(in, page.offset, packets);
-                    for (const auto& packet : packets) {
-                        w.add_packet(packet);
-                    }
-                }
-            }
-            for (const auto& packet : t->open) {
-                w.add_packet(packet);
-            }
             // The last page trims the stream to the track's own length.
-            w.finish(3 * (t->lookahead + t->total));
+            std::vector<audio::OggPageRef> pages =
+                t->write_joined(part_path, t->files, t->open, {}, 3 * (t->lookahead + t->total));
             std::filesystem::rename(part_path, final_path);
             for (const auto& f : t->files) {
                 std::error_code ec;
                 std::filesystem::remove(f.path, ec);
             }
-            t->files = {Track::File{final_path, 0, t->fed / kFrame, w.pages()}};
+            t->files = {Track::File{final_path, 0, t->fed / kFrame, std::move(pages)}};
             t->open.clear();
             t->open.shrink_to_fit();
             t->joined = true;

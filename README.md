@@ -230,6 +230,8 @@ Each run then writes its track (`mic`, `system` or `TapeTrack`) after the previo
 `tape.TryReadAudio(track, startMs, endMs, out samples)` reads any range back, whatever run or model
 made it. `TranscriberOptions.Tape` also makes `TryReadAudio` and `ReadPeaks` of the transcriber read
 through to the tape, and `TapeOffsetMs` places the run's segment times on it.
+`tape.CheckpointAsync()` writes each track's `<track>.opus` while the tape stays open, for example
+when recording stops, and `tape.CloseAsync()` writes it for the last time.
 `TranscribeSamplesAsync` decodes a range of samples on the loaded model apart from the live
 transcript, for example to decode a stretch again with another model after a run.
 

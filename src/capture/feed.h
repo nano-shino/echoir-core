@@ -3,7 +3,8 @@
 // The device's data callback only moves samples into a lock-free ring. A feeder thread drains the
 // ring into Session::push about every 20 ms, so the audio thread never waits on the session. When
 // the device sends nothing for a moment, the feeder pushes silence instead, so the session's
-// timeline follows the wall clock.
+// timeline follows the wall clock. Only the first 5 s of a gap are filled: the audio after a
+// longer gap follows on the timeline, and Session::mark_seam marks the place.
 #pragma once
 
 #include <cstdint>
