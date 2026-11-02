@@ -337,3 +337,152 @@ TEST_CASE("fake sessions write a tape through the C ABI, one run after another")
     echoir_session_free(plain);
     echoir_engine_free(engine);
 }
+
+namespace {
+
+// Pushes `blocks` blocks of speech in 100 ms pushes, processing after each, then flushes, and
+// returns the PARTIAL and FINAL events. The same ticks run every time, so the events do not depend
+// on timing or on other sessions of the engine.
+std::vector<Seen> pull_speech(echoir_session* session, std::size_t blocks) {
+    const std::vector<float> pcm = speech(blocks * kBlock);
+    std::vector<Seen> events;
+    const auto take = [&] {
+        for (const Seen& e : drain(session)) {
+            if (e.type == ECHOIR_EVENT_PARTIAL || e.type == ECHOIR_EVENT_FINAL) events.push_back(e);
+        }
+    };
+    for (std::size_t i = 0; i < blocks; ++i) {
+        if (echoir_session_push_f32(session, pcm.data() + i * kBlock, kBlock, kSampleRate, 1) !=
+                ECHOIR_OK ||
+            echoir_session_process(session) != ECHOIR_OK) {
+            return {};
+        }
+        take();
+    }
+    if (echoir_session_flush(session) != ECHOIR_OK) {
+        return {};
+    }
+    take();
+    return events;
+}
+
+bool same_events(const std::vector<Seen>& a, const std::vector<Seen>& b) {
+    if (a.size() != b.size()) return false;
+    for (std::size_t i = 0; i < a.size(); ++i) {
+        if (a[i].type != b[i].type || a[i].id != b[i].id || a[i].text != b[i].text) return false;
+    }
+    return true;
+}
+
+}  // namespace
+
+TEST_CASE("fake engine serves two sessions at once, each with its own events") {
+    echoir_engine* engine = create_engine();
+    REQUIRE(engine != nullptr);
+    echoir_session_params params{};
+    echoir_session_params_init(&params);
+
+    // Each session alone first, for the events it must give with the other one running.
+    echoir_session* solo = echoir_session_create(engine, &params, nullptr, nullptr);
+    REQUIRE(solo != nullptr);
+    const std::vector<Seen> alone_a = pull_speech(solo, 35);
+    echoir_session_free(solo);
+    solo = echoir_session_create(engine, &params, nullptr, nullptr);
+    REQUIRE(solo != nullptr);
+    const std::vector<Seen> alone_b = pull_speech(solo, 15);
+    echoir_session_free(solo);
+    REQUIRE(!alone_a.empty());
+    REQUIRE(!alone_b.empty());
+
+    echoir_session* a = echoir_session_create(engine, &params, nullptr, nullptr);
+    echoir_session* b = echoir_session_create(engine, &params, nullptr, nullptr);
+    REQUIRE(a != nullptr);
+    REQUIRE(b != nullptr);
+    std::vector<Seen> events_b;
+    std::thread thread_b([&] { events_b = pull_speech(b, 15); });
+    const std::vector<Seen> events_a = pull_speech(a, 35);
+    thread_b.join();
+    CHECK(same_events(events_a, alone_a));
+    CHECK(same_events(events_b, alone_b));
+
+    // Both live at once: each worker decodes its own audio.
+    echoir_session* live_a = echoir_session_create(engine, &params, nullptr, nullptr);
+    echoir_session* live_b = echoir_session_create(engine, &params, nullptr, nullptr);
+    REQUIRE(live_a != nullptr);
+    REQUIRE(live_b != nullptr);
+    REQUIRE(echoir_session_start(live_a) == ECHOIR_OK);
+    REQUIRE(echoir_session_start(live_b) == ECHOIR_OK);
+    const std::vector<float> pcm = speech(3 * kSampleRate);
+    REQUIRE(echoir_session_push_f32(live_a, pcm.data(), pcm.size(), kSampleRate, 1) == ECHOIR_OK);
+    REQUIRE(echoir_session_push_f32(live_b, pcm.data(), pcm.size(), kSampleRate, 1) == ECHOIR_OK);
+    int finals_a = 0;
+    int finals_b = 0;
+    const auto deadline = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+    while ((finals_a == 0 || finals_b == 0) && std::chrono::steady_clock::now() < deadline) {
+        for (const Seen& e : drain(live_a)) finals_a += e.type == ECHOIR_EVENT_FINAL ? 1 : 0;
+        for (const Seen& e : drain(live_b)) finals_b += e.type == ECHOIR_EVENT_FINAL ? 1 : 0;
+        std::this_thread::sleep_for(std::chrono::milliseconds(5));
+    }
+    CHECK(finals_a > 0);
+    CHECK(finals_b > 0);
+    REQUIRE(echoir_session_stop(live_a) == ECHOIR_OK);
+    REQUIRE(echoir_session_stop(live_b) == ECHOIR_OK);
+
+    // The engine goes after all of its sessions.
+    echoir_session_free(live_a);
+    echoir_session_free(a);
+    echoir_session_free(live_b);
+    echoir_session_free(b);
+    echoir_engine_free(engine);
+}
+
+TEST_CASE("fake sessions on one engine write two tracks of a tape from the same start") {
+    echoir_engine* engine = create_engine();
+    REQUIRE(engine != nullptr);
+    echoir_tape* tape = echoir_tape_create(nullptr);
+    REQUIRE(tape != nullptr);
+    echoir_session_params params{};
+    echoir_session_params_init(&params);
+    params.tape = tape;
+    const std::vector<float> pcm = speech(15 * kBlock);
+
+    // An earlier run leaves 1.5 s on the tape.
+    params.tape_track = "mic";
+    echoir_session* earlier = echoir_session_create(engine, &params, nullptr, nullptr);
+    REQUIRE(earlier != nullptr);
+    REQUIRE(echoir_session_push_f32(earlier, pcm.data(), pcm.size(), kSampleRate, 1) == ECHOIR_OK);
+    echoir_session_free(earlier);
+
+    // Both sessions are created before either takes audio, so their runs start together.
+    echoir_session* mic = echoir_session_create(engine, &params, nullptr, nullptr);
+    params.tape_track = "system";
+    echoir_session* system = echoir_session_create(engine, &params, nullptr, nullptr);
+    REQUIRE(mic != nullptr);
+    REQUIRE(system != nullptr);
+    std::int64_t mic_offset = -1;
+    std::int64_t system_offset = -1;
+    REQUIRE(echoir_session_tape_offset_ms(mic, &mic_offset) == ECHOIR_OK);
+    REQUIRE(echoir_session_tape_offset_ms(system, &system_offset) == ECHOIR_OK);
+    CHECK(mic_offset == 1500);
+    CHECK(system_offset == 1500);
+
+    REQUIRE(echoir_session_start(mic) == ECHOIR_OK);
+    REQUIRE(echoir_session_start(system) == ECHOIR_OK);
+    REQUIRE(echoir_session_push_f32(mic, pcm.data(), 10 * kBlock, kSampleRate, 1) == ECHOIR_OK);
+    REQUIRE(echoir_session_push_f32(system, pcm.data(), 10 * kBlock, kSampleRate, 1) == ECHOIR_OK);
+    REQUIRE(echoir_session_stop(mic) == ECHOIR_OK);
+    REQUIRE(echoir_session_stop(system) == ECHOIR_OK);
+    size_t n = 0;
+    REQUIRE(echoir_tape_read_audio(tape, "mic", 1500, INT64_MAX, nullptr, 0, &n) == ECHOIR_OK);
+    CHECK(n == 1000 * 16);
+    REQUIRE(echoir_tape_read_audio(tape, "system", 1500, INT64_MAX, nullptr, 0, &n) == ECHOIR_OK);
+    CHECK(n == 1000 * 16);
+    std::int64_t duration = 0;
+    REQUIRE(echoir_tape_duration_ms(tape, &duration) == ECHOIR_OK);
+    CHECK(duration == 2500);
+
+    echoir_session_free(mic);
+    echoir_session_free(system);
+    echoir_tape_free(tape);
+    echoir_engine_free(engine);
+}

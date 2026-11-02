@@ -37,7 +37,8 @@ struct DecodeResult {
     std::string continuation;
 };
 
-// decode() is not reentrant. The engine serves one session at a time, so calls never overlap.
+// decode() is not reentrant. The sessions of an engine take turns through its gate
+// (stream/engine_gate.h), so calls never overlap.
 // It throws std::invalid_argument for a language the model does not have, for a context that
 // does not fit, and for a prefix on a backend without prefix support. An empty pcm returns empty
 // text after those checks, so a caller can validate a request before any audio exists.

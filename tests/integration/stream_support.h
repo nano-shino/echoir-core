@@ -85,13 +85,16 @@ inline SessionConfig stream_config() {
 }
 
 // Pushes the whole input through a session, the way the CLI does, and returns every event.
-// on_chunk, when set, runs after each chunk with the audio position in ms.
-inline std::vector<SessionEvent> stream_all(
-    IAsrBackend& asr, vad::IVad& vad, const audio::PcmBuffer& wav,
-    const std::function<void(std::int64_t)>& on_chunk = {}) {
+// on_chunk, when set, runs after each chunk with the audio position in ms. Sessions that share asr
+// and vad on several threads pass the same gate.
+inline std::vector<SessionEvent> stream_all(IAsrBackend& asr, vad::IVad& vad,
+                                            const audio::PcmBuffer& wav,
+                                            const std::function<void(std::int64_t)>& on_chunk = {},
+                                            std::shared_ptr<stream::EngineGate> gate = nullptr) {
     std::vector<SessionEvent> events;
-    Session session(asr, vad, stream_config(),
-                    [&events](const SessionEvent& ev) { events.push_back(ev); });
+    Session session(
+        asr, vad, stream_config(), [&events](const SessionEvent& ev) { events.push_back(ev); },
+        std::move(gate));
     const auto rate = static_cast<std::int32_t>(wav.rate);
     const auto channels = static_cast<std::int32_t>(wav.channels);
     const std::size_t total_frames = wav.samples.size() / wav.channels;

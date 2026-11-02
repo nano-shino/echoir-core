@@ -73,6 +73,8 @@
 // decode time and window length per tick, the rtf of the ticks that decoded speech, and the load:
 // the decode time over the new audio the ticks took in. Once ticks run back to back the load stays
 // near 1 whether or not the session keeps up; lag() tells, by how much audio waits, at any time.
+// Time spent waiting for the gate while another session decodes is reported apart (wait_ms) and
+// left out of the decode time, so rtf stays the model's speed.
 //
 // Stabilizing the ongoing text, agreement policy (text::Stabilizer). Each decode of the ongoing
 // segment goes into its history, and the text shown is built in three steps:
@@ -203,9 +205,11 @@ void Session::State::drop_seam() {
     seam_ms = -1;
 }
 
-Session::Session(IAsrBackend& backend, vad::IVad& vad, SessionConfig config, SessionSink sink)
+Session::Session(IAsrBackend& backend, vad::IVad& vad, SessionConfig config, SessionSink sink,
+                 std::shared_ptr<stream::EngineGate> gate)
     : backend_(backend),
       vad_(vad),
+      gate_(gate ? std::move(gate) : std::make_shared<stream::EngineGate>()),
       config_(std::move(config)),
       sink_(std::move(sink)),
       store_(config_.retain_audio_ms) {
@@ -501,6 +505,7 @@ bool Session::run_tick(bool finish, bool drop_on_failure) {
     std::vector<float> carry;
     std::size_t cut = 0;
     std::int64_t speech_samples = 0;
+    double wait_ms = 0.0;
     // The error is reported first. In live mode the window is then given up, so the next tick
     // starts from new audio and cannot fail on the same range again.
     const auto fail = [&](const std::string& message) {
@@ -512,7 +517,7 @@ bool Session::run_tick(bool finish, bool drop_on_failure) {
     const auto decode_started = std::chrono::steady_clock::now();
     try {
         while (true) {
-            cut = analyze(current, finish, origin, next, events, speech_samples);
+            cut = analyze(current, finish, origin, next, events, speech_samples, wait_ms);
             if (!finish || cut >= current.size()) {
                 break;
             }
@@ -537,11 +542,12 @@ bool Session::run_tick(bool finish, bool drop_on_failure) {
     }
 
     if (config_.stats_every_ticks > 0) {
+        // Waiting for another session's turn is not decode time, so rtf stays the model's speed.
         const std::chrono::duration<double, std::milli> decode_time =
             std::chrono::steady_clock::now() - decode_started;
-        stats_.add(decode_time.count(), window_ms,
+        stats_.add(std::max(0.0, decode_time.count() - wait_ms), window_ms,
                    static_cast<double>(taken) / stream::kSamplesPerMs,
-                   static_cast<double>(speech_samples) / stream::kSamplesPerMs);
+                   static_cast<double>(speech_samples) / stream::kSamplesPerMs, wait_ms);
         if (stats_.ticks() >= static_cast<std::size_t>(config_.stats_every_ticks)) {
             SessionEvent ev;
             ev.type = ECHOIR_EVENT_STATS;
@@ -568,9 +574,21 @@ bool Session::run_tick(bool finish, bool drop_on_failure) {
 
 std::size_t Session::analyze(const std::vector<float>& window, bool finish, std::int64_t origin,
                              State& st, std::vector<SessionEvent>& events,
-                             std::int64_t& speech_samples) {
+                             std::int64_t& speech_samples, double& wait_ms) {
     const auto len = static_cast<std::int64_t>(window.size());
-    const std::vector<vad::Range> ranges = vad_.detect(window);
+    // Each call into the VAD or the decoder runs in a turn of the gate, which other sessions on
+    // the same models share. The turn ends with the call, so sessions interleave call by call.
+    const auto vad_detect = [&] {
+        const stream::EngineGate::Turn turn = gate_->enter();
+        wait_ms += turn.wait_ms();
+        return vad_.detect(window);
+    };
+    const auto decode = [&](const DecodeRequest& request) {
+        const stream::EngineGate::Turn turn = gate_->enter();
+        wait_ms += turn.wait_ms();
+        return backend_.decode(request);
+    };
+    const std::vector<vad::Range> ranges = vad_detect();
     const bool rollback = config_.policy == StreamPolicy::rollback;
 
     std::int64_t last_final_end = 0;  // window index where the latest final segment ends
@@ -626,7 +644,7 @@ std::size_t Session::analyze(const std::vector<float>& window, bool finish, std:
             request.rollback_tokens = config_.rollback_tokens;
         }
         speech_samples += end - start;
-        DecodeResult decoded = backend_.decode(request);
+        DecodeResult decoded = decode(request);
         std::u32string raw = utf8_to_utf32(decoded.text);
         std::u32string clean = text::clean_segment(raw);
         // A decode that only repeats the history may be the decoder copying its prompt, so the
@@ -636,7 +654,7 @@ std::size_t Session::analyze(const std::vector<float>& window, bool finish, std:
         if (!at_seam && !st.prompts.empty() && text::echoes_history(clean, st.prompts)) {
             DecodeRequest retry{request.pcm,     no_history,     request.language,
                                 request.context, request.prefix, request.rollback_tokens};
-            decoded = backend_.decode(retry);
+            decoded = decode(retry);
             raw = utf8_to_utf32(decoded.text);
             clean = text::clean_segment(raw);
             if (!text::echoes_history(clean, st.prompts)) {

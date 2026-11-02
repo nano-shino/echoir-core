@@ -26,6 +26,9 @@ struct TickSummary {
     // The rtf over the ticks that decoded speech only, so silence does not make a model look
     // faster than it is on speech. 0 when no tick decoded speech.
     double speech_rtf = 0.0;
+    // Mean time per tick spent waiting for other sessions on the same engine. It is not part of
+    // decode_ms, so it adds to the lag without changing rtf. 0 for a session alone on its engine.
+    std::int64_t wait_ms = 0;
 };
 
 // Accumulates tick timings. Not thread-safe: the session adds ticks under its decode lock.
@@ -33,9 +36,10 @@ class TickStats {
 public:
     // Adds one tick that decoded a window of window_ms of audio in decode_ms of wall time. Of the
     // window, new_ms was audio the tick took in (the rest was carried), and speech_ms is the length
-    // of the speech ranges it decoded.
-    void add(double decode_ms, double window_ms, double new_ms = 0.0,
-             double speech_ms = 0.0) noexcept;
+    // of the speech ranges it decoded. wait_ms is the time the tick waited for other sessions,
+    // which decode_ms does not include.
+    void add(double decode_ms, double window_ms, double new_ms = 0.0, double speech_ms = 0.0,
+             double wait_ms = 0.0) noexcept;
 
     // Ticks added since the last reset.
     std::size_t ticks() const noexcept { return ticks_; }
@@ -55,11 +59,12 @@ private:
     double decode_max_ms_ = 0.0;
     double speech_decode_ms_ = 0.0;  // decode time of the ticks that decoded speech
     double speech_window_ms_ = 0.0;  // window audio of the ticks that decoded speech
+    double wait_ms_ = 0.0;
 };
 
 // The detail of a STATS event: one JSON object on one line, with rtf, decode_ms, window_ms, ticks,
-// new_ms, speech_ms, decode_max_ms, load, speech_rtf and backend. The backend is a registry-style
-// name such as "whisper".
+// new_ms, speech_ms, decode_max_ms, load, speech_rtf, wait_ms and backend. The backend is a
+// registry-style name such as "whisper".
 std::string stats_json(const TickSummary& summary, const std::string& backend);
 
 }  // namespace echoir

@@ -15,8 +15,10 @@ double round4(double value) { return std::round(value * 10000.0) / 10000.0; }
 
 }  // namespace
 
-void TickStats::add(double decode_ms, double window_ms, double new_ms, double speech_ms) noexcept {
+void TickStats::add(double decode_ms, double window_ms, double new_ms, double speech_ms,
+                    double wait_ms) noexcept {
     ++ticks_;
+    wait_ms_ += wait_ms;
     decode_ms_ += decode_ms;
     window_ms_ += window_ms;
     new_ms_ += new_ms;
@@ -40,6 +42,7 @@ TickSummary TickStats::summary() const {
     out.decode_max_ms = round_ms(decode_max_ms_);
     out.load = new_ms_ > 0.0 ? decode_ms_ / new_ms_ : 0.0;
     out.speech_rtf = speech_window_ms_ > 0.0 ? speech_decode_ms_ / speech_window_ms_ : 0.0;
+    out.wait_ms = round_ms(wait_ms_ / count);
     return out;
 }
 
@@ -55,6 +58,7 @@ std::string stats_json(const TickSummary& summary, const std::string& backend) {
                                          {"decode_max_ms", summary.decode_max_ms},
                                          {"load", round4(summary.load)},
                                          {"speech_rtf", round4(summary.speech_rtf)},
+                                         {"wait_ms", summary.wait_ms},
                                          {"backend", backend}};
     return line.dump(-1, ' ', false, nlohmann::ordered_json::error_handler_t::replace);
 }

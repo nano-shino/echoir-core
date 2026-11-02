@@ -187,11 +187,13 @@ slowest tick. `load` is the decode time over the new audio: the share of real ti
 busy. Once a decode takes longer than `min_chunk_ms`, ticks run back to back and `load` stays near 1
 whether or not the session keeps up, so it is not a verdict; the backlog
 (`echoir_session_read_lag` in the C API) is. `speech_rtf` is the `rtf` over the ticks that decoded
-speech only, and 0 when none did. `backend` is `whisper` or `qwen3-asr`. A stats event has no `id`,
+speech only, and 0 when none did. `wait_ms` is the mean time per tick spent waiting for other
+sessions on the same models, which the service never has, so it is 0 here. `backend` is `whisper`
+or `qwen3-asr`. A stats event has no `id`,
 `start_ms`, `end_ms` or `text`:
 
 ```json
-{"type":"stats","rtf":0.12,"decode_ms":180,"window_ms":2600,"ticks":10,"new_ms":1000,"speech_ms":800,"decode_max_ms":400,"load":0.18,"speech_rtf":0.2,"backend":"qwen3-asr"}
+{"type":"stats","rtf":0.12,"decode_ms":180,"window_ms":2600,"ticks":10,"new_ms":1000,"speech_ms":800,"decode_max_ms":400,"load":0.18,"speech_rtf":0.2,"wait_ms":0,"backend":"qwen3-asr"}
 ```
 
 ## Replies
