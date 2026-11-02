@@ -113,6 +113,41 @@ public sealed class AudioStoreTests
     }
 
     [TestMethod]
+    public async Task ReadsFollowOneErrorConvention()
+    {
+        await using var transcriber = await LoadAsync();
+
+        // Before any run: argument errors still throw, and missing audio is false or empty.
+        AssertArgumentErrors(transcriber);
+        Assert.IsFalse(transcriber.TryReadAudio(new Segment(1, 0, 1000, string.Empty), out short[] none, padMs: 0));
+        Assert.AreEqual(0, none.Length);
+        Assert.AreEqual(0, transcriber.ReadPeaks(0, 1000, 10).Length);
+
+        transcriber.Start(AudioSource.Push, options: Retain10s);
+        transcriber.Push(Tone(SampleRate, 0.5), SampleRate, 1);
+        AssertArgumentErrors(transcriber);
+        // A segment that starts at or after the newest audio has nothing to read.
+        Assert.IsFalse(transcriber.TryReadAudio(new Segment(9, 5000, 6000, string.Empty), out short[] later, padMs: 0));
+        Assert.AreEqual(0, later.Length);
+        Assert.AreEqual(0, transcriber.ReadPeaks(5000, 6000, 10).Length);
+        // An empty range is empty, not an error.
+        Assert.AreEqual(0, transcriber.ReadPeaks(500, 500, 10).Length);
+        await transcriber.StopAsync();
+        AssertArgumentErrors(transcriber);
+    }
+
+    private static void AssertArgumentErrors(EchoirTranscriber transcriber)
+    {
+        var segment = new Segment(1, 0, 1000, string.Empty);
+        Assert.ThrowsException<ArgumentOutOfRangeException>(() => transcriber.TryReadAudio(segment, out _, padMs: -1));
+        Assert.ThrowsException<ArgumentOutOfRangeException>(() => transcriber.ReadPeaks(0, 1000, 0));
+        Assert.ThrowsException<ArgumentOutOfRangeException>(() => transcriber.ReadPeaks(0, 1000, 15));
+        Assert.ThrowsException<ArgumentOutOfRangeException>(() => transcriber.ReadPeaks(0, 1000, -10));
+        Assert.ThrowsException<ArgumentOutOfRangeException>(() => transcriber.ReadPeaks(-1, 1000, 10));
+        Assert.ThrowsException<ArgumentOutOfRangeException>(() => transcriber.ReadPeaks(500, 400, 10));
+    }
+
+    [TestMethod]
     public async Task PeaksOfATonAreItsAmplitudeInEveryBucket()
     {
         await using var transcriber = await LoadAsync();
