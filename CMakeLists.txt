@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.24)
 
 # echoir-core: portable C++20 real-time transcription core with Whisper and Qwen3-ASR backends.
 project(echoir
-  VERSION 3.2.0
+  VERSION 3.3.0
   DESCRIPTION "Live audio to transcript core (Whisper and Qwen3-ASR)"
   LANGUAGES C CXX)
 
