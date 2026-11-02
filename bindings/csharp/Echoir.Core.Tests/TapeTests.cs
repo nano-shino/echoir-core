@@ -217,6 +217,10 @@ public sealed class TapeTests
         Assert.ThrowsException<ArgumentOutOfRangeException>(() => tape.TryReadAudio("mic", 20, 10, out _));
         Assert.ThrowsException<ArgumentOutOfRangeException>(() => tape.ReadPeaks("mic", 0, 100, 15));
         Assert.ThrowsException<ArgumentOutOfRangeException>(() => tape.ReadPeaks("mic", -1, 100, 10));
+        Assert.ThrowsException<ArgumentOutOfRangeException>(() => tape.ReadPeaks("mic", 20, 10, 10));
+        Assert.ThrowsException<ArgumentException>(() => tape.TryReadAudio("", 0, 10, out _));
+        Assert.ThrowsException<ArgumentNullException>(() => tape.TryReadAudio(null!, 0, 10, out _));
+        Assert.ThrowsException<ArgumentException>(() => tape.ReadPeaks("", 0, 100, 10));
         // Missing audio is false or empty.
         Assert.IsFalse(tape.TryReadAudio("none", 0, 10, out short[] none));
         Assert.AreEqual(0, none.Length);

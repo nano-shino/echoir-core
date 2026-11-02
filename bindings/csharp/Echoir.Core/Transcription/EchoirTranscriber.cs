@@ -427,9 +427,11 @@ public sealed class EchoirTranscriber : IDisposable, IAsyncDisposable
     // Copies the audio of a segment of the current or last run as 16 kHz mono samples, with padMs
     // of audio before and after it. The padding is cut short at the start of the run's timeline
     // and where the audio is no longer kept (RetainAudio, or the 2 minutes of a tape without a
-    // folder). With a tape, audio older than 2 minutes is decoded from its pages. Returns false,
-    // with an empty array, when the run keeps no audio, or when the audio of the segment itself is
-    // gone. Throws ArgumentOutOfRangeException for a negative padMs.
+    // folder). With a tape, audio older than 2 minutes is decoded from its pages. Returns true only
+    // with at least one sample; returns false, with an empty array, when there is no run, the run
+    // keeps no audio, or the audio of the segment itself is gone. Throws ArgumentOutOfRangeException
+    // for a negative padMs, and an EchoirException only when the kept audio cannot be read (a page
+    // file of the tape that cannot be read).
     public unsafe bool TryReadAudio(Segment segment, out short[] samples, int padMs = 150)
     {
         ArgumentOutOfRangeException.ThrowIfNegative(padMs);
@@ -466,7 +468,7 @@ public sealed class EchoirTranscriber : IDisposable, IAsyncDisposable
             EchoirException.ThrowIfFailed(status, "echoir_session_read_audio");
             if (frames == 0)
             {
-                return true;
+                return false;
             }
 
             var copy = new short[(int)frames];
@@ -480,16 +482,23 @@ public sealed class EchoirTranscriber : IDisposable, IAsyncDisposable
                 return false;
             }
             EchoirException.ThrowIfFailed(status, "echoir_session_read_audio");
-            samples = copy;
-            return true;
+            samples = copied == frames ? copy : copy[..(int)copied];
+            return samples.Length > 0;
         }
     }
 
     // The level envelope of [startMs, endMs): the min and max of each bucket of bucketMs, which is
     // a positive multiple of 10. The end is clamped to the newest whole 10 ms, and the last bucket
-    // may be shorter. Empty when there is no session.
+    // may be shorter. Empty when there is no session. Throws ArgumentOutOfRangeException for a bad
+    // bucket, a negative start or an end before the start, with or without a session.
     public Peak[] ReadPeaks(long startMs, long endMs, int bucketMs)
     {
+        if (bucketMs <= 0 || bucketMs % PeakCellMs != 0)
+        {
+            throw new ArgumentOutOfRangeException(nameof(bucketMs), "The bucket must be a positive multiple of 10 ms.");
+        }
+        ArgumentOutOfRangeException.ThrowIfNegative(startMs);
+        ArgumentOutOfRangeException.ThrowIfLessThan(endMs, startMs);
         lock (_native)
         {
             if (_session is null)
@@ -498,10 +507,9 @@ public sealed class EchoirTranscriber : IDisposable, IAsyncDisposable
             }
             IntPtr handle = _session.DangerousGetHandle();
             // The end is clamped here, not by the core, so the count and the copy below cover the
-            // same buckets even while a capture adds audio. An end before the start is passed on
-            // unchanged, and the core rejects it.
+            // same buckets even while a capture adds audio.
             long newest = EnvelopeEndLocked(handle);
-            long clampedEnd = endMs < startMs ? endMs : Math.Max(startMs, Math.Min(endMs, newest));
+            long clampedEnd = Math.Max(startMs, Math.Min(endMs, newest));
             return PeaksLocked(handle, startMs, clampedEnd, bucketMs);
         }
     }
