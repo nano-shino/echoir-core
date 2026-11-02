@@ -38,6 +38,11 @@ constexpr double kPushSeconds = 0.1;
 // A device that sends nothing for this long is silent, and the gap is filled with silence, so
 // timestamps follow the wall clock (loopback sends nothing while no sound plays).
 constexpr std::chrono::milliseconds kGapIdle{200};
+// At most this much of a gap is filled. It is enough for either VAD to end the open segment (the
+// longest needs about 2 s of silence), longer than a device switch or a pause in speech, and cheap
+// to decode at once when the system wakes from sleep. The rest of a longer gap is left off the
+// timeline, and the audio after it starts after a seam.
+constexpr std::chrono::seconds kGapMaxFill{5};
 
 // The ERROR detail for a device that cannot be used any more.
 constexpr const char* kDeviceLost = "device_lost";
@@ -295,6 +300,18 @@ struct CaptureFeed::Impl {
             1, static_cast<std::size_t>(static_cast<double>(rate) * kPushSeconds));
         buffer_.resize(piece_frames * channels);
         audio::SpscRing<float>* ring = ring_.get();
+        // The silence of a gap that this audio ends goes before it. After a stall of the feeder
+        // itself, such as a system sleep, that gap has not been filled yet.
+        const std::size_t queued = channels == 0 ? 0 : ring->size() / channels;
+        if (queued > 0 && rate > 0) {
+            const double queued_seconds = static_cast<double>(queued) / rate;
+            const auto now = GapFill::Clock::now();
+            fill_gap(now - std::chrono::duration_cast<GapFill::Clock::duration>(
+                               std::chrono::duration<double>(queued_seconds)));
+            if (gap_.resume(now, queued_seconds)) {
+                session_.mark_seam();
+            }
+        }
         for (std::size_t got = ring->pop(buffer_); got > 0; got = ring->pop(buffer_)) {
             const std::span<float> samples(buffer_.data(), got);
             float peak = peak_.load();
@@ -314,12 +331,12 @@ struct CaptureFeed::Impl {
         fill_gap();
     }
 
-    // Pushes silence for the time the device sent nothing, at the format of the device last
-    // opened. Feeder thread only.
-    void fill_gap() {
+    // Pushes silence for the time the device sent nothing until now, at the format of the device
+    // last opened. Feeder thread only.
+    void fill_gap(GapFill::Clock::time_point now = GapFill::Clock::now()) {
         const std::uint32_t rate = rate_.load();
         const std::uint32_t channels = channels_.load();
-        std::size_t missing = gap_.silence_frames(rate, GapFill::Clock::now());
+        std::size_t missing = gap_.silence_frames(rate, now);
         if (missing == 0) {
             return;
         }
@@ -410,11 +427,11 @@ struct CaptureFeed::Impl {
     std::condition_variable wake_cv_;
 
     std::thread feeder_;
-    std::vector<float> buffer_;   // feeder thread only
-    std::vector<float> silence_;  // feeder thread only
-    GapFill gap_{kGapIdle};       // started by the owner thread, then feeder thread only
-    bool started_ = false;        // owner thread only
-    bool stopped_ = false;        // owner thread only
+    std::vector<float> buffer_;           // feeder thread only
+    std::vector<float> silence_;          // feeder thread only
+    GapFill gap_{kGapIdle, kGapMaxFill};  // started by the owner thread, then feeder only
+    bool started_ = false;                // owner thread only
+    bool stopped_ = false;                // owner thread only
 };
 
 CaptureFeed::CaptureFeed(Source source, const std::string& device_id, Session& session)

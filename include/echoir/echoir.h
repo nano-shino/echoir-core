@@ -343,7 +343,8 @@ ECHOIR_API echoir_status  echoir_tape_add_track(echoir_tape*, const char* name, 
 //    "tracks":[{"name","label","file","duration_ms","writing","runs":[{"start_ms","end_ms"}],
 //               "error"}]}
 // duration_ms of the tape is that of its longest track. file is the name of the track's joined
-// file in the folder, written by echoir_tape_close() ("" without a folder). writing is true while
+// file in the folder, written by echoir_tape_checkpoint() and echoir_tape_close() ("" without a
+// folder). writing is true while
 // a session writes the track. runs are the stretches that sessions wrote, in order; a seam is
 // where one ends and the next starts. error, present only when a page file could not be written,
 // is the reason: the audio stays in memory and the write is tried again a minute later. The
@@ -374,6 +375,17 @@ ECHOIR_API echoir_status  echoir_tape_read_peaks(echoir_tape*, const char* track
                                                  int64_t start_ms, int64_t end_ms,
                                                  int32_t bucket_ms, float* out_minmax, size_t cap,
                                                  size_t* n_buckets);
+
+// With a folder, writes <track>.opus for every track that has audio: a complete, standard Ogg
+// Opus file of everything the track holds so far, while the tape stays open and sessions keep
+// writing. The page files are copied into it and the audio still in memory is encoded for it; the
+// tape's own pages, memory and reads are unchanged, and audio written later continues the track
+// with no gap. A later checkpoint or echoir_tape_close() replaces the file. Each call copies the
+// page files and encodes at most the newest 2 minutes, so run it off the UI thread. Without a
+// folder, or after echoir_tape_close(), it does nothing and returns ECHOIR_OK. Returns
+// ECHOIR_ERR_INTERNAL when a file cannot be written (such as a file another program holds open);
+// the other tracks are still written.
+ECHOIR_API echoir_status  echoir_tape_checkpoint(echoir_tape*);
 
 // Ends the tape. Sessions still writing it go on, but their audio is no longer kept. With a
 // folder, the rest of each track is encoded and its pages are joined into <track>.opus, a
@@ -410,7 +422,12 @@ ECHOIR_API const char*    echoir_devices_json(void);
 //
 // Timestamps follow the wall clock from the start of the capture: when the device sends nothing
 // for a moment (loopback while no sound plays, or a lost default device), silence is pushed for
-// the time that passed.
+// the time that passed, up to 5 seconds per gap. That is enough for the open segment to end. The
+// rest of a longer gap, such as a quiet loopback for minutes or a system sleep, is left off the
+// timeline: no silence is pushed, decoded or stored for it, and timestamps after it are that much
+// earlier than the wall clock. With a tape, the audio after such a gap starts a new run of the
+// session's track where the track ends (a seam in echoir_tape_tracks_json()), and
+// echoir_session_tape_offset_ms() does not change, so session time still maps to tape time.
 //
 // If the chosen device is lost, an ERROR event with detail "device_lost" is sent, and the capture
 // ends. The session keeps running until it is stopped. If the default device is lost, the capture

@@ -125,6 +125,40 @@ public sealed class TapeTests
     }
 
     [TestMethod]
+    public async Task CheckpointWritesThePlayableFileWhileTheTapeStaysOpen()
+    {
+        using var folder = new TempFolder();
+        await using var tape = EchoirTape.Create(folder.Path);
+        await using var transcriber = await LoadAsync();
+        string file = System.IO.Path.Combine(folder.Path, "mic.opus");
+        transcriber.Start(AudioSource.Push, options: new TranscriberOptions { Tape = tape });
+        transcriber.Push(Voice(2 * SampleRate, seed: 8), SampleRate, 1);
+        await transcriber.StopAsync();
+        Assert.IsFalse(File.Exists(file));
+
+        await tape.CheckpointAsync();
+        Assert.IsTrue(File.Exists(file));
+        long first = new FileInfo(file).Length;
+        Assert.IsFalse(tape.IsClosed);
+
+        // A later run goes on writing, and the next checkpoint replaces the file with the longer track.
+        transcriber.Start(AudioSource.Push, options: new TranscriberOptions { Tape = tape });
+        transcriber.Push(Voice(2 * SampleRate, seed: 9), SampleRate, 1);
+        await transcriber.StopAsync();
+        await tape.CheckpointAsync();
+        Assert.IsTrue(new FileInfo(file).Length > first);
+        Assert.IsTrue(tape.TryReadAudio("mic", 0, 4000, out short[] samples));
+        Assert.IsTrue(samples.Length >= 4 * SampleRate - 16);
+
+        await tape.CloseAsync();
+        await tape.CheckpointAsync();
+        Assert.IsTrue(File.Exists(file));
+
+        await using var memory = EchoirTape.Create(null);
+        await memory.CheckpointAsync();
+    }
+
+    [TestMethod]
     public async Task DisposingTheTapeFirstWhileARunWritesItIsSafe()
     {
         using var folder = new TempFolder();

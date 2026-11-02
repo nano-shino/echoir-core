@@ -91,6 +91,9 @@ internal static unsafe partial class NativeMethods
     [LibraryImport(Library, EntryPoint = "echoir_tape_read_peaks")]
     internal static partial int TapeReadPeaks(nint tape, nint track, long startMs, long endMs, int bucketMs, float* outMinMax, nuint cap, nuint* nBuckets);
 
+    [LibraryImport(Library, EntryPoint = "echoir_tape_checkpoint")]
+    internal static partial int TapeCheckpoint(nint tape);
+
     [LibraryImport(Library, EntryPoint = "echoir_tape_close")]
     internal static partial int TapeClose(nint tape);
 
