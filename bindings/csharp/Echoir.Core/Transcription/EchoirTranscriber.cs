@@ -57,6 +57,7 @@ public sealed class EchoirTranscriber : IDisposable, IAsyncDisposable
     private readonly List<double> _speechRtfs = new();
     private LagMonitor? _lagMonitor;
     private TranscriberStats? _lastStats;
+    private CaptureState _captureState;
     private string _backend = string.Empty;
     private double _speechMs;
     private long _runStartedMs;
@@ -71,6 +72,23 @@ public sealed class EchoirTranscriber : IDisposable, IAsyncDisposable
     // Raised for each STATS event of the core: every 10 decoding ticks, on the same context as the
     // transcript changes.
     public event EventHandler<TranscriberStats>? Stats;
+
+    // Raised when CaptureState changes, on the same context as the transcript changes.
+    public event EventHandler<CaptureState>? CaptureStateChanged;
+
+    // The state of the device capture, sampled about 30 times a second while running: Waiting
+    // while the default device is gone and the capture waits for one. Off while not running and
+    // for the Push source. Never waits for a decode.
+    public CaptureState CaptureState
+    {
+        get
+        {
+            lock (_speedGate)
+            {
+                return _captureState;
+            }
+        }
+    }
 
     // How far the decoding is behind the audio, updated about 30 times a second while running.
     // TranscriberLag.Idle while not running. Never waits for a decode.
@@ -581,6 +599,7 @@ public sealed class EchoirTranscriber : IDisposable, IAsyncDisposable
             _running = false;
             _runEndedMs = Environment.TickCount64;
         }
+        SetCaptureStateLocked(CaptureState.Off);
         _inputMuted = false;
         CollectLocked();
 
@@ -630,6 +649,7 @@ public sealed class EchoirTranscriber : IDisposable, IAsyncDisposable
         int count = 0;
         IntPtr handle = _session.DangerousGetHandle();
         EventData ev = default;
+        // The session is in queue mode, so ECHOIR_ERR_STATE means the queue is empty.
         while (NativeMethods.SessionPoll(handle, &ev) == NativeValues.StatusOk)
         {
             if (FromNative(in ev) is Notification notification)
@@ -679,6 +699,43 @@ public sealed class EchoirTranscriber : IDisposable, IAsyncDisposable
         {
             _lagMonitor?.Add(Environment.TickCount64, lag.BacklogMs, lag.TickMs);
         }
+    }
+
+    // Lock held. Reads the capture state of the running session; true when it changed, and the
+    // change is queued for delivery.
+    private unsafe bool SampleCaptureLocked()
+    {
+        if (!_running || _session is null)
+        {
+            return false;
+        }
+        int state;
+        if (NativeMethods.SessionCaptureState(_session.DangerousGetHandle(), &state) != NativeValues.StatusOk)
+        {
+            return false;
+        }
+        return SetCaptureStateLocked(state switch
+        {
+            NativeValues.CaptureLive => CaptureState.Live,
+            NativeValues.CaptureWaiting => CaptureState.Waiting,
+            NativeValues.CaptureEnded => CaptureState.Ended,
+            _ => CaptureState.Off,
+        });
+    }
+
+    // Lock held. Records the capture state and queues a change for delivery; true when it changed.
+    private bool SetCaptureStateLocked(CaptureState state)
+    {
+        lock (_speedGate)
+        {
+            if (_captureState == state)
+            {
+                return false;
+            }
+            _captureState = state;
+        }
+        EnqueueLocked(new Notification(NotificationKind.Capture, 0, 0, 0, string.Empty, Capture: state));
+        return true;
     }
 
     // The value at fraction q of sorted values, by nearest rank; 0 for none.
@@ -782,6 +839,9 @@ public sealed class EchoirTranscriber : IDisposable, IAsyncDisposable
             case NotificationKind.Stats:
                 Stats?.Invoke(this, notification.Stats!);
                 break;
+            case NotificationKind.Capture:
+                CaptureStateChanged?.Invoke(this, notification.Capture);
+                break;
         }
     }
 
@@ -793,6 +853,10 @@ public sealed class EchoirTranscriber : IDisposable, IAsyncDisposable
         {
             count = CollectLocked();
             SampleLagLocked();
+            if (SampleCaptureLocked())
+            {
+                count++;
+            }
         }
         if (count > 0)
         {
@@ -843,8 +907,9 @@ public sealed class EchoirTranscriber : IDisposable, IAsyncDisposable
         nint engine = NativeMethods.EngineCreateFromModel(&parameters);
         if (engine == 0)
         {
-            // The call returns no status, so the reason is in the message only.
-            throw EchoirException.FromLastError(EchoirStatus.ModelLoad, "echoir_engine_create_from_model");
+            // The call returns a pointer, so its status is the core's last status: ModelLoad for a
+            // missing file, InvalidArgument for an unknown id.
+            throw EchoirException.FromLastFailure("echoir_engine_create_from_model");
         }
         return new EngineHandle(engine);
     }
@@ -878,7 +943,7 @@ public sealed class EchoirTranscriber : IDisposable, IAsyncDisposable
         }
         if (session == 0)
         {
-            throw EchoirException.FromLastError(EchoirStatus.InvalidArgument, "echoir_session_create");
+            throw EchoirException.FromLastFailure("echoir_session_create");
         }
         return new SessionHandle(engine, session);
     }
@@ -1045,17 +1110,19 @@ public sealed class EchoirTranscriber : IDisposable, IAsyncDisposable
         Cleared,
         Error,
         Stats,
+        Capture,
     }
 
     // One event waiting to be raised. For an error, Text holds the message; for STATS, Stats holds
-    // the figures.
+    // the figures; for a capture state change, Capture holds the new state.
     private readonly record struct Notification(
         NotificationKind Kind,
         long Id,
         long StartMs,
         long EndMs,
         string Text,
-        TranscriberStats? Stats = null);
+        TranscriberStats? Stats = null,
+        CaptureState Capture = CaptureState.Off);
 
     // The poll thread. It is stopped by a flag, and joined by Dispose.
     private sealed class Poller

@@ -125,6 +125,38 @@ TEST_CASE("an unknown device id is an invalid argument") {
     echoir_engine_free(engine);
 }
 
+TEST_CASE("capture state is OFF without a capture and LIVE while one runs") {
+    const auto models = find_models();
+    ECHOIR_REQUIRE_OR_SKIP(models, "whisper-tiny-en and silero-v6.2.0 (vad) models");
+    echoir_engine* engine = create_engine(*models);
+    REQUIRE(engine != nullptr);
+    Probe probe;
+    echoir_session* session = create_session(engine, &probe);
+    REQUIRE(session != nullptr);
+
+    int32_t state = -1;
+    CHECK(echoir_session_capture_state(session, nullptr) == ECHOIR_ERR_INVALID_ARG);
+    REQUIRE(echoir_session_capture_state(session, &state) == ECHOIR_OK);
+    CHECK(state == ECHOIR_CAPTURE_OFF);
+
+    // The null backend's device stays open, so the capture is live until it is stopped.
+    REQUIRE(echoir_session_start_capture(session, ECHOIR_SOURCE_MIC, nullptr) == ECHOIR_OK);
+    REQUIRE(echoir_session_capture_state(session, &state) == ECHOIR_OK);
+    CHECK(state == ECHOIR_CAPTURE_LIVE);
+    REQUIRE(echoir_session_stop(session) == ECHOIR_OK);
+    REQUIRE(echoir_session_capture_state(session, &state) == ECHOIR_OK);
+    CHECK(state == ECHOIR_CAPTURE_OFF);
+
+    // A push session never captures.
+    REQUIRE(echoir_session_start(session) == ECHOIR_OK);
+    REQUIRE(echoir_session_capture_state(session, &state) == ECHOIR_OK);
+    CHECK(state == ECHOIR_CAPTURE_OFF);
+    REQUIRE(echoir_session_stop(session) == ECHOIR_OK);
+
+    echoir_session_free(session);
+    echoir_engine_free(engine);
+}
+
 TEST_CASE("push is refused while the session captures") {
     const auto models = find_models();
     ECHOIR_REQUIRE_OR_SKIP(models, "whisper-tiny-en and silero-v6.2.0 (vad) models");
@@ -185,6 +217,13 @@ TEST_CASE("capture works in queue mode") {
     echoir_event event{};
     while (echoir_session_poll(session, &event) == ECHOIR_OK) {
     }
+    // An empty queue is not a failure, so it keeps the reason of the last failing call.
+    CHECK(echoir_session_start_capture(nullptr, ECHOIR_SOURCE_MIC, nullptr) ==
+          ECHOIR_ERR_INVALID_ARG);
+    const std::string reason = echoir_last_error();
+    CHECK(echoir_session_poll(session, &event) == ECHOIR_ERR_STATE);
+    CHECK(std::string(echoir_last_error()) == reason);
+    CHECK(echoir_last_status() == ECHOIR_ERR_INVALID_ARG);
 
     echoir_session_free(session);
     echoir_engine_free(engine);

@@ -59,8 +59,9 @@ TEST_CASE("engine create reports a missing model in the last error") {
         (echoir::test::source_dir() / "models" / "no-such-model.bin").string();
     echoir_engine_params params = engine_params(model.c_str(), "no-such-vad.bin");
     CHECK(echoir_engine_create(&params) == nullptr);
-    // Engine create returns a pointer, so the MODEL_LOAD status is not visible here. The message
+    // Engine create returns a pointer, so the status comes from echoir_last_status(). The message
     // names the function and the file.
+    CHECK(echoir_last_status() == ECHOIR_ERR_MODEL_LOAD);
     CHECK(last_error_contains("echoir_engine_create: "));
     CHECK(last_error_contains("no-such-model.bin"));
 }
@@ -186,6 +187,7 @@ TEST_CASE("engine create from model names an unknown id in the last error") {
     p.model_id = "no-such-id";
     p.models_dir = dir.c_str();
     CHECK(echoir_engine_create_from_model(&p) == nullptr);
+    CHECK(echoir_last_status() == ECHOIR_ERR_INVALID_ARG);
     CHECK(last_error_contains("echoir_engine_create_from_model"));
     CHECK(last_error_contains("no-such-id"));
 }
@@ -214,6 +216,7 @@ TEST_CASE("engine create from model reports a missing file by name and id") {
     p.model_id = "whisper-tiny-en";
     p.models_dir = dir.c_str();
     CHECK(echoir_engine_create_from_model(&p) == nullptr);
+    CHECK(echoir_last_status() == ECHOIR_ERR_MODEL_LOAD);
     CHECK(last_error_contains("ggml-tiny.en.bin"));
     CHECK(last_error_contains("whisper-tiny-en"));
 }

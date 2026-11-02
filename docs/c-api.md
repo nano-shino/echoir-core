@@ -38,7 +38,7 @@ failure.
 | `ECHOIR_ERR_INVALID_ARG` | A NULL or out-of-range argument, such as a bad sample rate. |
 | `ECHOIR_ERR_MODEL_LOAD` | A model file is missing, unreadable or not the expected format. |
 | `ECHOIR_ERR_BACKEND` | A backend (whisper.cpp or llama.cpp) failed to set up or decode. |
-| `ECHOIR_ERR_STATE` | The call is not valid now: wrong driving mode, the engine already serves a session, or the event queue is empty. |
+| `ECHOIR_ERR_STATE` | The call is not valid now: wrong driving mode, or the engine already serves a session. `echoir_session_poll()` also returns it for an empty queue, which is not a failure. |
 | `ECHOIR_ERR_NOT_IMPLEMENTED` | The function is declared but not available in this build. |
 | `ECHOIR_ERR_INTERNAL` | An unexpected failure inside the core. |
 
@@ -48,9 +48,11 @@ Functions that return a pointer return NULL on failure. The `*_params_init` func
 ### Error messages
 
 Call `echoir_last_error()` after a failure to get the reason. The message has the form
-`<function>: <reason>`. It is kept per thread, so it describes the most recent failing call on the
-calling thread. Engine creation returns a pointer, so it has no status code. Its reason is only
-available from `echoir_last_error()`.
+`<function>: <reason>`. `echoir_last_status()` gives the status of the same call. Both are kept per
+thread, so they describe the most recent failing call on the calling thread. A function that returns
+a pointer reports a failure only as NULL, so read its status from `echoir_last_status()`: for
+example, `echoir_engine_create_from_model()` gives `ECHOIR_ERR_MODEL_LOAD` for a missing model file
+and `ECHOIR_ERR_INVALID_ARG` for an unknown id.
 
 ### Strings
 
@@ -138,7 +140,8 @@ The usual order of calls is:
 5. Start the session. Use `echoir_session_start_capture()` to let the library read a device. Or use
    `echoir_session_start()` and push audio with the push functions.
 6. Read events. In callback mode they arrive on the driving thread. In queue mode, call
-   `echoir_session_poll()` until it returns `ECHOIR_ERR_STATE`.
+   `echoir_session_poll()` until it returns `ECHOIR_ERR_STATE`, which in queue mode means only that the
+   queue is empty.
 7. Stop with `echoir_session_stop()`, then read the remaining events.
 8. Free the session with `echoir_session_free()`, and then the engine with `echoir_engine_free()`.
 
@@ -247,6 +250,15 @@ const char* echoir_last_error(void);
 Returns the message of the calling thread's most recent failing call, as `<function>: <reason>`. It is
 empty before any failure and is never NULL. The pointer stays valid until the thread's next failing call.
 
+```c
+echoir_status echoir_last_status(void);
+```
+
+Returns the status of the calling thread's most recent failing call, the one `echoir_last_error()`
+describes, or `ECHOIR_OK` before any failure. Read it right after the call, on the same thread. It is
+how a host gets the status of a call that returns a pointer, such as `echoir_engine_create()` or
+`echoir_session_create()`.
+
 ### Parameter defaults
 
 ```c
@@ -280,7 +292,8 @@ echoir_engine* echoir_engine_create_from_model(const echoir_model_params* params
 Looks up `model_id` and its VAD in the catalogue, then checks that their files are in `models_dir` with
 the sizes that the catalogue gives. It then creates the engine as `echoir_engine_create()` does. An
 unknown or non-speech id fails with `ECHOIR_ERR_INVALID_ARG`. A missing or wrong-size file fails with
-`ECHOIR_ERR_MODEL_LOAD`. Both are reported through `echoir_last_error()`.
+`ECHOIR_ERR_MODEL_LOAD`. The call returns NULL either way; `echoir_last_status()` gives the status
+and `echoir_last_error()` the reason.
 
 ```c
 void echoir_engine_free(echoir_engine* engine);
@@ -317,7 +330,11 @@ echoir_status echoir_session_poll(echoir_session* session, echoir_event* out);
 ```
 
 Queue mode only. Copies the next queued event into `*out` and returns `ECHOIR_OK`. It returns
-`ECHOIR_ERR_STATE` when the queue is empty, or when the session is in callback mode.
+`ECHOIR_ERR_STATE` when the queue is empty, or when the session is in callback mode. The mode is fixed
+when the session is created, so in queue mode `ECHOIR_ERR_STATE` means only that there is nothing to
+take, and any other status is a real failure. An empty queue is not a failure: it leaves
+`echoir_last_error()` and `echoir_last_status()` as they were, so polling from a UI timer does not
+overwrite the reason of an earlier failure on that thread.
 
 Consecutive PARTIAL events of the same segment are merged, and the newest one is kept. The queue holds
 up to 1024 events. A new PARTIAL is dropped when the queue is full. A new FINAL, CLEARED or ERROR event
@@ -636,7 +653,27 @@ line up after such a gap until a session attaches again.
 If the chosen device is lost, an ERROR event with `detail` set to `"device_lost"` is sent, and the
 capture ends. The session keeps running until it is stopped. If the default device is lost, the capture
 reopens the new default. If the system has no device at all, it retries every second until one appears
-or the session is stopped. No event is sent during that wait.
+or the session is stopped. No event is sent during that wait; `echoir_session_capture_state()`
+reports it.
+
+```c
+typedef enum { ECHOIR_CAPTURE_OFF = 0, ECHOIR_CAPTURE_LIVE = 1, ECHOIR_CAPTURE_WAITING = 2,
+               ECHOIR_CAPTURE_ENDED = 3 } echoir_capture_state;
+
+echoir_status echoir_session_capture_state(echoir_session* session, int32_t* out_state);
+```
+
+Sets `*out_state` to the state of the session's capture:
+
+| State | Meaning |
+|---|---|
+| `ECHOIR_CAPTURE_OFF` | The session does not capture its own audio: a push session, a session not started, or one stopped. |
+| `ECHOIR_CAPTURE_LIVE` | The device is open and its audio goes into the session. |
+| `ECHOIR_CAPTURE_WAITING` | The default device was lost and none has opened for a second or more, such as when the system has no device at all. The capture keeps trying and returns to `LIVE` by itself. A switch to another default device takes less than a second, so it does not show here. |
+| `ECHOIR_CAPTURE_ENDED` | The capture ended by itself: the chosen device was lost (the `"device_lost"` ERROR event was sent) or the capture failed. It stays so until the session is stopped. |
+
+The call is cheap and never waits for a decode or a device, so a host can read it on a timer, for
+example to show that it waits for a device. It returns `ECHOIR_ERR_INVALID_ARG` for a NULL argument.
 
 ### Model catalogue and devices
 

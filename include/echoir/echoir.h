@@ -6,8 +6,8 @@
  *
  * Rules that apply to every function unless its comment says otherwise:
  *  - A function that can fail returns echoir_status, or a pointer that is NULL on failure. The
- *    reason is in echoir_last_error(), which is per thread. The void functions (the *_params_init
- *    and *_free calls) are the exception.
+ *    reason is in echoir_last_error() and the status in echoir_last_status(), both per thread.
+ *    The void functions (the *_params_init and *_free calls) are the exception.
  *  - No C++ exception crosses this boundary.
  *  - A handle (engine or session) is used by one thread at a time. The echoir_session_push_*
  *    functions are the exception: they are thread-safe.
@@ -49,8 +49,9 @@ extern "C" {
 //   ECHOIR_ERR_INVALID_ARG       a NULL or out-of-range argument, such as a bad sample rate.
 //   ECHOIR_ERR_MODEL_LOAD        a model file is missing, unreadable or not the expected format.
 //   ECHOIR_ERR_BACKEND           a backend (whisper.cpp or llama.cpp) failed to set up or decode.
-//   ECHOIR_ERR_STATE             the call is not valid now: wrong driving mode, the engine already
-//                                serves a session, or the event queue is empty.
+//   ECHOIR_ERR_STATE             the call is not valid now: wrong driving mode, or the engine
+//                                already serves a session. echoir_session_poll() also returns it
+//                                for an empty queue, which is not a failure.
 //   ECHOIR_ERR_NOT_IMPLEMENTED   the function is declared but not available in this build.
 //   ECHOIR_ERR_INTERNAL          an unexpected failure inside the core.
 typedef enum { ECHOIR_OK = 0, ECHOIR_ERR_INVALID_ARG, ECHOIR_ERR_MODEL_LOAD,
@@ -156,6 +157,13 @@ ECHOIR_API const char*    echoir_version(void);
 // before any failure, never NULL. The pointer stays valid until this thread's next failing call.
 ECHOIR_API const char*    echoir_last_error(void);
 
+// Status of this thread's most recent failing call, the one echoir_last_error() describes:
+// ECHOIR_OK before any failure. A call that returns a pointer reports its failure only as NULL,
+// so this is how a host tells, say, a missing model file (ECHOIR_ERR_MODEL_LOAD) from a bad
+// argument (ECHOIR_ERR_INVALID_ARG) after echoir_engine_create() or echoir_session_create().
+// Read it right after the failing call, on the same thread.
+ECHOIR_API echoir_status  echoir_last_status(void);
+
 // Sets *p to the defaults (Whisper backend, use_gpu 1, n_threads 0, all paths NULL) and sets
 // struct_size. With p NULL, nothing is written and the last error is set.
 ECHOIR_API void           echoir_engine_params_init(echoir_engine_params*);
@@ -187,7 +195,9 @@ ECHOIR_API echoir_session* echoir_session_create(echoir_engine*, const echoir_se
 ECHOIR_API void           echoir_session_free(echoir_session*);
 
 // Queue mode only. Copies the next queued event into *out and returns ECHOIR_OK. Returns
-// ECHOIR_ERR_STATE when the queue is empty, or when the session is in callback mode. out->text and
+// ECHOIR_ERR_STATE when the queue is empty, or when the session is in callback mode, so in queue
+// mode ECHOIR_ERR_STATE means only that there is nothing to take. An empty queue is not a failure:
+// it leaves echoir_last_error() and echoir_last_status() as they were. out->text and
 // out->detail stay valid until the next poll or free. Consecutive PARTIALs of the same segment
 // coalesce into the newest one. Once 1024 events are queued, a new PARTIAL is dropped, and a new
 // FINAL, CLEARED or ERROR event evicts the oldest queued PARTIAL, if there is one, to make room.
@@ -432,9 +442,29 @@ ECHOIR_API const char*    echoir_devices_json(void);
 // If the chosen device is lost, an ERROR event with detail "device_lost" is sent, and the capture
 // ends. The session keeps running until it is stopped. If the default device is lost, the capture
 // reopens the new default, and when the system has no device at all it keeps trying (every second)
-// until one appears or the session is stopped. No event is sent for that wait.
+// until one appears or the session is stopped. No event is sent for that wait; it shows in
+// echoir_session_capture_state().
 ECHOIR_API echoir_status  echoir_session_start_capture(echoir_session*, echoir_source,
                                                        const char* device_id);
+
+// State of the capture of a session, from echoir_session_capture_state().
+//   OFF      the session does not capture its own audio: a push session, a session not started,
+//            or one stopped.
+//   LIVE     the device is open and its audio goes into the session.
+//   WAITING  the default device was lost and none has opened for a second or more, such as when
+//            the system has no device at all. The capture keeps trying and goes back to LIVE by
+//            itself when one opens. A switch to another default device is quicker than a second,
+//            so it does not show here.
+//   ENDED    the capture has ended by itself: the chosen device was lost (an ERROR event with
+//            detail "device_lost" was sent) or the capture failed. It stays ENDED until the
+//            session is stopped.
+typedef enum { ECHOIR_CAPTURE_OFF = 0, ECHOIR_CAPTURE_LIVE = 1, ECHOIR_CAPTURE_WAITING = 2,
+               ECHOIR_CAPTURE_ENDED = 3 } echoir_capture_state;
+
+// Sets *out_state to the echoir_capture_state of the session's capture. Cheap and never waits for
+// a decode or a device, so a host can call it on a timer, for example to show that it waits for a
+// device. Returns ECHOIR_ERR_INVALID_ARG for a NULL argument.
+ECHOIR_API echoir_status  echoir_session_capture_state(echoir_session*, int32_t* out_state);
 
 // Model catalogue. The entries are those of models/registry.json, which the library builds in.
 // Each file of an entry lives at <models_dir>/<file name>. The catalogue gives the size of each

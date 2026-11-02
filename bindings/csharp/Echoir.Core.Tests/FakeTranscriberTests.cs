@@ -233,6 +233,43 @@ public sealed class FakeTranscriberTests
     }
 
     [TestMethod]
+    public async Task LoadingAnUnknownModelIdFailsWithTheCoreStatus()
+    {
+        await using var transcriber = new EchoirTranscriber();
+        EchoirException error = await Assert.ThrowsExceptionAsync<EchoirException>(
+            () => transcriber.LoadAsync("no-such-id", TestPaths.ModelsDir));
+        Assert.AreEqual(EchoirStatus.InvalidArgument, error.Status);
+        StringAssert.Contains(error.Message, "no-such-id");
+    }
+
+    [TestMethod]
+    public async Task APushRunHasNoCaptureState()
+    {
+        await using var transcriber = await LoadAsync();
+        var changes = new List<CaptureState>();
+        transcriber.CaptureStateChanged += (_, state) =>
+        {
+            lock (changes)
+            {
+                changes.Add(state);
+            }
+        };
+
+        transcriber.Start(AudioSource.Push);
+        PushSeconds(transcriber, 1);
+        // Several polls run in this time, and each one samples the capture state.
+        Thread.Sleep(200);
+        Assert.AreEqual(CaptureState.Off, transcriber.CaptureState);
+        await transcriber.StopAsync();
+
+        Assert.AreEqual(CaptureState.Off, transcriber.CaptureState);
+        lock (changes)
+        {
+            Assert.AreEqual(0, changes.Count);
+        }
+    }
+
+    [TestMethod]
     public void StartWithoutAModelIsRejected()
     {
         using var transcriber = new EchoirTranscriber();

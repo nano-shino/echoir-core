@@ -32,6 +32,15 @@ public sealed class EchoirException : Exception
         return new EchoirException(status, string.IsNullOrEmpty(text) ? call + " failed" : text);
     }
 
+    // The error of the calling thread's last failed native call, with the status the core recorded
+    // for it (echoir_last_status). For calls that return a pointer, which report only NULL. Read it
+    // right after the call.
+    internal static EchoirException FromLastFailure(string call)
+    {
+        var status = (EchoirStatus)NativeMethods.LastStatus();
+        return FromLastError(status == EchoirStatus.Ok ? EchoirStatus.Internal : status, call);
+    }
+
     // Throws when a native call returned a status other than ECHOIR_OK.
     internal static void ThrowIfFailed(int status, string call)
     {

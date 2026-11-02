@@ -16,6 +16,9 @@ internal static unsafe partial class NativeMethods
     [LibraryImport(Library, EntryPoint = "echoir_last_error")]
     internal static partial nint LastError();
 
+    [LibraryImport(Library, EntryPoint = "echoir_last_status")]
+    internal static partial int LastStatus();
+
     [LibraryImport(Library, EntryPoint = "echoir_session_params_init")]
     internal static partial void SessionParamsInit(SessionParams* p);
 
@@ -42,6 +45,9 @@ internal static unsafe partial class NativeMethods
 
     [LibraryImport(Library, EntryPoint = "echoir_session_start_capture")]
     internal static partial int SessionStartCapture(nint session, int source, nint deviceId);
+
+    [LibraryImport(Library, EntryPoint = "echoir_session_capture_state")]
+    internal static partial int SessionCaptureState(nint session, int* state);
 
     [LibraryImport(Library, EntryPoint = "echoir_session_stop")]
     internal static partial int SessionStop(nint session);

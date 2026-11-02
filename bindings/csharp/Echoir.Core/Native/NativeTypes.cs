@@ -52,7 +52,7 @@ internal struct LagData
     public long TickMs;
 }
 
-// Values of echoir_status, echoir_event_type and echoir_source.
+// Values of echoir_status, echoir_event_type, echoir_source and echoir_capture_state.
 internal static class NativeValues
 {
     internal const int StatusOk = 0;
@@ -68,4 +68,9 @@ internal static class NativeValues
 
     internal const int SourceMic = 1;
     internal const int SourceLoopback = 2;
+
+    internal const int CaptureOff = 0;
+    internal const int CaptureLive = 1;
+    internal const int CaptureWaiting = 2;
+    internal const int CaptureEnded = 3;
 }
