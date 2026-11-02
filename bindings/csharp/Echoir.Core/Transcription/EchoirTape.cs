@@ -115,8 +115,10 @@ public sealed class EchoirTape : IDisposable, IAsyncDisposable
     // Copies the audio of [startMs, endMs) of a track as 16 kHz mono samples. The end is clamped to
     // the end of the track. Audio older than 2 minutes comes from the Opus pages, so it is close to,
     // not equal to, what was recorded. Returns false, with an empty array, when the track is unknown,
-    // the range starts at or after its end, or part of it is no longer kept. Throws
-    // ArgumentOutOfRangeException for a negative start or an end before the start.
+    // the range starts at or after its end, or part of it is no longer kept; true only with at least
+    // one sample. Throws ArgumentException for an empty track name (ArgumentNullException for null),
+    // ArgumentOutOfRangeException for a negative start or an end before the start, and an
+    // EchoirException only when the kept audio cannot be read (a page file that cannot be read).
     public unsafe bool TryReadAudio(string track, long startMs, long endMs, out short[] samples)
     {
         ArgumentException.ThrowIfNullOrEmpty(track);
@@ -162,8 +164,9 @@ public sealed class EchoirTape : IDisposable, IAsyncDisposable
 
     // The level envelope of [startMs, endMs) of a track: the min and max of each bucket of bucketMs,
     // a positive multiple of 10. The end is clamped to the newest whole 10 ms of the track, and the
-    // last bucket may be shorter. Empty for an unknown track. Throws ArgumentOutOfRangeException for
-    // a bad bucket, a negative start or an end before the start.
+    // last bucket may be shorter. Empty for an unknown track. Throws ArgumentException for an empty
+    // track name (ArgumentNullException for null) and ArgumentOutOfRangeException for a bad bucket,
+    // a negative start or an end before the start.
     public unsafe Peak[] ReadPeaks(string track, long startMs, long endMs, int bucketMs)
     {
         ArgumentException.ThrowIfNullOrEmpty(track);

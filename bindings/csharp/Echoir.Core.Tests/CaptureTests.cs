@@ -74,9 +74,27 @@ public sealed class CaptureTests
         {
             _putenv_s(name, value ?? string.Empty);
         }
+        else if (OperatingSystem.IsMacOS() || OperatingSystem.IsLinux())
+        {
+            // The libc environment is the one the native library reads; "libc" resolves to libSystem on macOS.
+            if (value is null)
+            {
+                unsetenv(name);
+            }
+            else
+            {
+                setenv(name, value, 1);
+            }
+        }
 #endif
     }
 
     [DllImport("ucrtbase.dll", EntryPoint = "_putenv_s", CharSet = CharSet.Ansi, ExactSpelling = true)]
     private static extern int _putenv_s(string name, string value);
+
+    [DllImport("libc", EntryPoint = "setenv", CharSet = CharSet.Ansi, ExactSpelling = true)]
+    private static extern int setenv(string name, string value, int overwrite);
+
+    [DllImport("libc", EntryPoint = "unsetenv", CharSet = CharSet.Ansi, ExactSpelling = true)]
+    private static extern int unsetenv(string name);
 }
