@@ -229,6 +229,12 @@ int run(int argc, const CharT* const* argv, const char* argv0) {
                      "(default: the backend's; rollback skips Whisper)")
         ->check(CLI::IsMember({"agreement", "rollback"}))
         ->needs(bench_stream_flag);
+    bench_cmd
+        ->add_option("--streams", bench.streams,
+                     "with --stream: run this many sessions at once on one loaded model, each "
+                     "fed the whole file, and report each one's lag")
+        ->check(CLI::Range(1, 64))
+        ->needs(bench_stream_flag);
     add_run_options(bench_cmd, bench.run, models_dir);
 
     CLI::App* devices_cmd = app.add_subcommand(

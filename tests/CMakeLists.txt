@@ -232,6 +232,11 @@ if(TARGET echoir_cli)
       "BlackHole")
   endif()
 
+  # Several streams at once are a streaming measurement.
+  add_usage_test(cli_bench_streams_needs_stream
+    "bench|${JFK}|--ref|${CMAKE_CURRENT_SOURCE_DIR}/fixtures/jfk.ref.txt|--streams|2"
+    "--streams requires --stream")
+
   # bench --stream runs the model at the audio's pace and prints its row with the latency columns.
   # Skipped when the model is not fetched.
   if(NOT ECHOIR_FAKE_BACKEND)
