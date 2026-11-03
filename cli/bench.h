@@ -19,6 +19,9 @@ struct BenchOptions {
     RunSettings run;
     bool stream = false;  // run through a streaming session and measure its latency
     std::string policy;   // with stream: "agreement" or "rollback"; empty takes the default
+    // With stream: run this many sessions at once on one loaded model and report each one, with
+    // its backlog. 0 runs one session per model with the plain streaming table.
+    int streams = 0;
 };
 
 // Runs each model and prints a table with one row per run, as each run finishes. The rate is WER,
@@ -27,7 +30,9 @@ struct BenchOptions {
 // each backend's default model runs when its files and its default VAD are on disk. A default model
 // that is missing is skipped with a note on stderr. With stream, a run pushes the audio at its own
 // speed and the table shows the first partial and the final of each segment, at the 50th and 95th
-// percentile. Throws std::exception when no model runs or a run fails.
+// percentile. With streams, each model runs that many sessions at once, each fed the whole file
+// from the same moment, and the table has one row per session with its wait, its backlog and a
+// verdict. Throws std::exception when no model runs or a run fails.
 void run_bench(const BenchOptions& options, const std::vector<std::filesystem::path>& model_dirs);
 
 }  // namespace echoir::cli

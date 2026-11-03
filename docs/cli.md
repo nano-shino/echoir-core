@@ -89,6 +89,22 @@ stabilization policy, and the default is the backend's. The rate of the streamed
 scored as in `transcribe --stream`. The RTF column is the mean speed that the session reports in its
 stats events, or `-` when a run sent none.
 
+`--streams N` (with `--stream`) runs N sessions at once on one loaded model, as a host with several
+audio sources does, and prints one row per session. Each session gets the whole file, pushed at its
+own speed from the same moment, so their speech arrives together and their decodes wait for each
+other the most. Besides the rate, the RTF and the latencies, a row shows the mean time per tick the
+session waited for the others (`wait`, from the stats events), the backlog at the 95th percentile
+and its maximum (the audio not decoded yet, read about 30 times a second, as
+`echoir_session_read_lag()` gives it), and a verdict: `live`, `strained` when the backlog at the 90th
+percentile of its per-second peaks is more than `min_chunk_ms` + 1.5 s or grows by more than 0.05 ms
+per ms over the run, and `behind` past `min_chunk_ms` + 4 s or 0.10 ms per ms. `--streams 1` gives
+the same columns for one session, for comparison.
+
+```sh
+build/macos-metal/bin/echoir bench tests/fixtures/pd_nasa_ep180.wav \
+  --ref tests/fixtures/pd_nasa_ep180.ref.txt --model whisper-tiny-en --stream --streams 2
+```
+
 `echoir score` compares a transcript with a reference text. Both are UTF-8 files, and `-` reads
 standard input. It prints one JSON line, `{"rate":…,"subs":…,"dels":…,"ins":…,"ref_len":…}`, where
 the rate is `(subs + dels + ins) / ref_len`. `--normalize` prints the normalized text of one file
