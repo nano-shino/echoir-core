@@ -846,6 +846,22 @@ echoir_tape* echoir_tape_create(const char* folder) {
     }
 }
 
+echoir_tape* echoir_tape_open(const char* folder) {
+    const char* fn = "echoir_tape_open";
+    if (folder == nullptr || folder[0] == '\0') {
+        set_last_error(fn, "folder must not be NULL or empty", ECHOIR_ERR_INVALID_ARG);
+        return nullptr;
+    }
+    try {
+        auto t = std::make_unique<echoir_tape>();
+        t->tape = echoir::stream::Tape::open(echoir::text::path_from_utf8(folder));
+        return t.release();
+    } catch (...) {
+        status_of_current_exception(fn);
+        return nullptr;
+    }
+}
+
 echoir_status echoir_tape_add_track(echoir_tape* t, const char* name, const char* label) {
     const char* fn = "echoir_tape_add_track";
     if (name == nullptr) {

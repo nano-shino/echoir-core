@@ -170,14 +170,17 @@ void OggOpusWriter::write_page(std::span<const std::uint8_t> body,
     }
 }
 
-void read_ogg_packets(std::ifstream& in, std::int64_t offset,
-                      std::vector<std::vector<std::uint8_t>>& out) {
+namespace {
+
+// Reads the whole Ogg page at offset into page and checks it. Returns null when it checks out,
+// else the reason.
+const char* read_page(std::ifstream& in, std::int64_t offset, std::vector<std::uint8_t>& page) {
     in.clear();
     in.seekg(offset);
-    std::vector<std::uint8_t> page(kHeaderBytes);
+    page.resize(kHeaderBytes);
     in.read(reinterpret_cast<char*>(page.data()), kHeaderBytes);
     if (!in || std::memcmp(page.data(), "OggS", 4) != 0) {
-        throw std::runtime_error("an Ogg page is missing or damaged");
+        return "an Ogg page is missing or damaged";
     }
     const std::size_t segments = page[26];
     page.resize(kHeaderBytes + segments);
@@ -192,13 +195,78 @@ void read_ogg_packets(std::ifstream& in, std::int64_t offset,
     in.read(reinterpret_cast<char*>(page.data() + body_at),
             static_cast<std::streamsize>(body_size));
     if (!in) {
-        throw std::runtime_error("an Ogg page is cut short");
+        return "an Ogg page is cut short";
     }
+    // The CRC is computed with its own field at zero; the page keeps it zeroed afterwards.
     const std::uint32_t stored = get_u32(page.data() + 22);
     std::memset(page.data() + 22, 0, 4);
-    if (ogg_crc(page) != stored) {
-        throw std::runtime_error("an Ogg page fails its CRC check");
+    return ogg_crc(page) == stored ? nullptr : "an Ogg page fails its CRC check";
+}
+
+std::int64_t get_i64(const std::uint8_t* p) {
+    std::uint64_t v = 0;
+    for (int i = 7; i >= 0; --i) {
+        v = (v << 8) | p[i];
     }
+    return static_cast<std::int64_t>(v);
+}
+
+}  // namespace
+
+OggOpusScan scan_ogg_opus(const std::filesystem::path& path, std::int64_t first_packet) {
+    std::ifstream in(path, std::ios::binary);
+    if (!in) {
+        throw std::runtime_error("cannot open " + path.filename().string());
+    }
+    std::vector<std::uint8_t> page;
+    // The OpusHead page: one packet, "OpusHead", version 1, then the channels and the pre-skip.
+    if (read_page(in, 0, page) != nullptr || page[26] != 1 || page.size() < kHeaderBytes + 1 + 12 ||
+        std::memcmp(page.data() + kHeaderBytes + 1, "OpusHead", 8) != 0) {
+        throw std::runtime_error(path.filename().string() + " is not an Ogg Opus file");
+    }
+    const std::uint8_t* head = page.data() + kHeaderBytes + 1;
+    OggOpusScan scan;
+    scan.pre_skip = static_cast<std::uint16_t>(head[10] | (head[11] << 8));
+    const std::uint32_t serial = get_u32(page.data() + 14);
+    std::int64_t offset = static_cast<std::int64_t>(page.size());
+    // The OpusTags page.
+    if (read_page(in, offset, page) != nullptr || page.size() < kHeaderBytes + page[26] + 8 ||
+        std::memcmp(page.data() + kHeaderBytes + page[26], "OpusTags", 8) != 0) {
+        throw std::runtime_error(path.filename().string() + " has no Opus tags");
+    }
+    offset += static_cast<std::int64_t>(page.size());
+    std::int64_t next = first_packet;
+    while (read_page(in, offset, page) == nullptr && get_u32(page.data() + 14) == serial) {
+        const std::size_t segments = page[26];
+        std::int32_t packets = 0;
+        for (std::size_t i = 0; i < segments; ++i) {
+            if (page[kHeaderBytes + i] < 255) ++packets;
+        }
+        // A packet that goes on to the next page is something the writer never makes.
+        if (segments > 0 && page[kHeaderBytes + segments - 1] == 255) break;
+        if (packets > 0) {
+            scan.pages.push_back(OggPageRef{offset, next, packets});
+            next += packets;
+        }
+        scan.last_granule = get_i64(page.data() + 6);
+        offset += static_cast<std::int64_t>(page.size());
+        if ((page[5] & kFlagEos) != 0) {
+            scan.complete = true;
+            break;
+        }
+    }
+    scan.packets = next - first_packet;
+    return scan;
+}
+
+void read_ogg_packets(std::ifstream& in, std::int64_t offset,
+                      std::vector<std::vector<std::uint8_t>>& out) {
+    std::vector<std::uint8_t> page;
+    if (const char* error = read_page(in, offset, page)) {
+        throw std::runtime_error(error);
+    }
+    const std::size_t segments = page[26];
+    const std::size_t body_at = kHeaderBytes + segments;
     std::size_t at = body_at;
     std::size_t size = 0;
     for (std::size_t i = 0; i < segments; ++i) {

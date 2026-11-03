@@ -49,6 +49,16 @@ public:
     // keeps only the newest kMemoryMs of each track, in memory. Throws std::runtime_error when the
     // folder cannot be created.
     static std::shared_ptr<Tape> create(const std::filesystem::path& folder);
+
+    // A read-only tape of the files a tape left in folder. Each track is <track>.opus, or its page
+    // files <track>.00001.opus and on (left when the process ended before close()), whichever
+    // holds more of the track. Page files are read in order from the first; a missing number or a
+    // page that does not check out ends the track there, as does a cut-off joined file. Other
+    // files are not tracks. Every track is decoded once to build its envelope. The tape is closed
+    // and writes nothing: add_track() and attach() throw StateError, and checkpoint() and close()
+    // do nothing. Each track has one run, the whole track, and its label is its name. Throws
+    // std::runtime_error when folder is not a directory or a file of a track cannot be read.
+    static std::shared_ptr<Tape> open(const std::filesystem::path& folder);
     ~Tape();
     Tape(const Tape&) = delete;
     Tape& operator=(const Tape&) = delete;
@@ -60,9 +70,10 @@ public:
     void add_track(const std::string& name, const std::string& label);
 
     // The tracks as a JSON object:
-    //   {"duration_ms":N,"closed":bool,"tracks":[{"name","label","file","duration_ms","writing",
+    //   {"duration_ms":N,"closed":bool,"read_only":bool,"tracks":[{"name","label","file","duration_ms","writing",
     //    "runs":[{"start_ms","end_ms"}],"error"}]}
-    // file is the name of the joined file in the folder (written by close()), runs are the
+    // file is the name of the joined file in the folder (written by close(); empty for a track
+    // that open() read from page files), runs are the
     // stretches that sessions wrote (the seams are between them), and error, present only after a
     // page could not be written, is the reason.
     std::string tracks_json() const;
@@ -103,6 +114,8 @@ public:
     // std::runtime_error when a file cannot be written; the tape is closed even then.
     void close();
     bool closed() const;
+    // True for a tape made by open().
+    bool read_only() const noexcept { return read_only_; }
 
 private:
     struct Track;
@@ -161,6 +174,7 @@ private:
     std::mutex checkpoint_mu_;
     std::vector<std::unique_ptr<Track>> tracks_;
     bool closed_ = false;
+    bool read_only_ = false;
 };
 
 }  // namespace echoir::stream

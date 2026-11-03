@@ -71,6 +71,28 @@ private:
     bool finished_ = false;
 };
 
+// What scan_ogg_opus() found in an Ogg Opus file.
+struct OggOpusScan {
+    // The pre-skip of the OpusHead, in 48 kHz samples.
+    std::uint16_t pre_skip = 0;
+    // The pages of audio packets that check out, in order, their packets numbered from the
+    // first_packet given to the scan. Pages without packets are left out.
+    std::vector<OggPageRef> pages;
+    // The audio packets in those pages.
+    std::int64_t packets = 0;
+    // The granule position of the last page that checks out, or -1 when there is none.
+    std::int64_t last_granule = -1;
+    // True when the file ends on a page marked end of stream, so nothing was cut off.
+    bool complete = false;
+};
+
+// Reads the page layout of an Ogg Opus file of one mono stream, as OggOpusWriter writes it: the
+// OpusHead page, the OpusTags page, then the audio pages. Stops at the first page that is cut
+// short, fails its CRC check or belongs to another stream, so a file whose writer stopped midway
+// gives the pages before that. Throws std::runtime_error when the file cannot be opened or does
+// not start with the two Opus header pages.
+OggOpusScan scan_ogg_opus(const std::filesystem::path& path, std::int64_t first_packet);
+
 // Reads the Ogg page at offset of an open file and appends its packets to out. Checks the capture
 // pattern and the CRC, and refuses a packet that continues on the next page, which the writer
 // never makes. Throws std::runtime_error for a page that cannot be read or does not check out.

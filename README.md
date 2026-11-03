@@ -22,7 +22,8 @@ before the first release.
 - Live capture from microphones, and from loopback devices on Windows, through miniaudio.
 - A session tape that keeps the audio of a whole recording across sessions and model switches, on
   one timeline with a track per input: the newest 2 minutes in memory, older audio as Opus pages on
-  disk, joined into one Ogg Opus file per track at the end. Reads go by time range.
+  disk, joined into one Ogg Opus file per track at the end. Reads go by time range. A saved tape
+  opens again read-only.
 - A C ABI (`include/echoir/echoir.h`) and a C# binding, `Echoir.Core`.
 - The `echoir` command-line tool: `transcribe`, `bench`, `score`, `devices`, `models`, and `serve`,
   a JSON-lines service for host processes.
@@ -233,6 +234,8 @@ made it. `TranscriberOptions.Tape` also makes `TryReadAudio` and `ReadPeaks` of 
 through to the tape, and `TapeOffsetMs` places the run's segment times on it.
 `tape.CheckpointAsync()` writes each track's `<track>.opus` while the tape stays open, for example
 when recording stops, and `tape.CloseAsync()` writes it for the last time.
+`EchoirTape.Open(folder)` opens such a folder later as a read-only tape, also from the page files a
+process left when it ended without closing, so a saved recording can be replayed or decoded again.
 `TranscribeSamplesAsync` decodes a range of samples on the loaded model apart from the live
 transcript, for example to decode a stretch again with another model after a run.
 

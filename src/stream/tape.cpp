@@ -9,6 +9,7 @@
 #include <deque>
 #include <fstream>
 #include <limits>
+#include <map>
 #include <new>
 #include <stdexcept>
 #include <system_error>
@@ -116,6 +117,54 @@ std::string file_stem(const std::string& name) {
     return out;
 }
 
+// The track name of a file stem, the reverse of file_stem(). False for a stem that file_stem()
+// cannot have made: a byte outside its set, a bad %XX, or a name that is not 1 to 64 bytes.
+bool name_of_stem(const std::string& stem, std::string& name) {
+    auto hex = [](char c) -> int {
+        if (c >= '0' && c <= '9') return c - '0';
+        if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+        return -1;
+    };
+    name.clear();
+    for (std::size_t i = 0; i < stem.size(); ++i) {
+        if (stem[i] == '%') {
+            if (i + 2 >= stem.size()) return false;
+            const int hi = hex(stem[i + 1]);
+            const int lo = hex(stem[i + 2]);
+            if (hi < 0 || lo < 0) return false;
+            name.push_back(static_cast<char>(hi * 16 + lo));
+            i += 2;
+        } else {
+            name.push_back(stem[i]);
+        }
+    }
+    return !name.empty() && name.size() <= Tape::kMaxNameBytes && file_stem(name) == stem;
+}
+
+// Splits a file name of a tape into its stem and page number: "<stem>.opus" gives page 0,
+// "<stem>.<digits>.opus" that number. False for any other name.
+bool split_tape_file(const std::string& file, std::string& stem, long& page) {
+    const std::string ext = ".opus";
+    if (file.size() <= ext.size() || file.compare(file.size() - ext.size(), ext.size(), ext) != 0) {
+        return false;
+    }
+    const std::string base = file.substr(0, file.size() - ext.size());
+    const std::size_t dot = base.find('.');
+    if (dot == std::string::npos) {
+        stem = base;
+        page = 0;
+        return true;
+    }
+    const std::string digits = base.substr(dot + 1);
+    if (digits.empty() || digits.size() > 9 ||
+        digits.find_first_not_of("0123456789") != std::string::npos) {
+        return false;
+    }
+    stem = base.substr(0, dot);
+    page = std::stol(digits);
+    return page > 0;
+}
+
 bool same_ignoring_ascii_case(const std::string& a, const std::string& b) {
     if (a.size() != b.size()) return false;
     for (std::size_t i = 0; i < a.size(); ++i) {
@@ -184,7 +233,8 @@ struct Tape::Track {
     std::vector<std::vector<std::uint8_t>> open;              // packets not in a file yet
     std::vector<File> files;
     int pages_written = 0;
-    bool joined = false;  // close() joined every packet into one file
+    bool joined = false;      // close() joined every packet into one file
+    bool from_pages = false;  // open() read the track from its page files
     std::string error;
 
     bool paged() const { return enc != nullptr || joined; }
@@ -366,6 +416,10 @@ struct Tape::Track {
         return p;
     }
 
+    // Decodes every packet of the files in order and appends the track's samples [0, total) to
+    // the envelope. For a track that open() read.
+    void build_envelope();
+
     // Fetches packets [q0, q1) as planned and decodes them into out, which then holds the
     // decoder's output from packet q0 on. Runs without the track's lock.
     static void decode_plan(const Plan& plan, std::int64_t q0, std::int64_t q1,
@@ -384,6 +438,121 @@ std::shared_ptr<Tape> Tape::create(const std::filesystem::path& folder) {
 }
 
 Tape::Tape(std::filesystem::path folder) : folder_(std::move(folder)) {}
+
+std::shared_ptr<Tape> Tape::open(const std::filesystem::path& folder) {
+    std::error_code ec;
+    if (folder.empty() || !std::filesystem::is_directory(folder, ec)) {
+        throw std::runtime_error("the tape folder does not exist");
+    }
+    // The files of each track, by stem, so the tracks come in name order: the joined file and
+    // the page files by number.
+    struct Found {
+        std::filesystem::path joined;
+        std::map<long, std::filesystem::path> pages;
+    };
+    std::map<std::string, Found> found;
+    for (const auto& entry : std::filesystem::directory_iterator(folder, ec)) {
+        std::error_code type_ec;
+        if (!entry.is_regular_file(type_ec)) continue;
+        const std::u8string u8 = entry.path().filename().u8string();
+        const std::string file(u8.begin(), u8.end());
+        std::string stem;
+        std::string name;
+        long page = 0;
+        if (!split_tape_file(file, stem, page) || !name_of_stem(stem, name)) continue;
+        Found& f = found[stem];
+        if (page == 0) {
+            f.joined = entry.path();
+        } else {
+            f.pages[page] = entry.path();
+        }
+    }
+    if (ec) {
+        throw std::runtime_error("cannot list the tape folder: " + ec.message());
+    }
+
+    std::shared_ptr<Tape> tape(new Tape(folder));
+    tape->closed_ = true;
+    tape->read_only_ = true;
+    for (const auto& [stem, files] : found) {
+        std::string name;
+        name_of_stem(stem, name);
+        bool taken = false;
+        for (const auto& t : tape->tracks_) {
+            taken = taken || same_ignoring_ascii_case(t->name, name);
+        }
+        if (taken) continue;
+
+        // The joined file: one stream whose last granule marks the end of the track.
+        std::vector<Track::File> joined;
+        std::int64_t joined_total = 0;
+        std::int64_t joined_lookahead = 0;
+        if (!files.joined.empty()) {
+            // A file that is not Ogg Opus holds nothing, so the page files may still be read.
+            audio::OggOpusScan scan;
+            try {
+                scan = audio::scan_ogg_opus(files.joined, 0);
+            } catch (const std::exception&) {
+            }
+            joined_lookahead = scan.pre_skip / 3;
+            const std::int64_t whole =
+                std::max<std::int64_t>(0, scan.packets * kFrame - joined_lookahead);
+            joined_total = std::clamp<std::int64_t>(
+                scan.complete ? scan.last_granule / 3 - joined_lookahead : whole, 0, whole);
+            if (scan.packets > 0) {
+                joined.push_back(Track::File{files.joined, 0, scan.packets, scan.pages});
+            }
+        }
+        // The page files: their packets go on from file to file, until a number is missing or a
+        // file does not check out.
+        std::vector<Track::File> pages;
+        std::int64_t packets = 0;
+        std::int64_t pages_lookahead = 0;
+        long expected = 1;
+        for (const auto& [number, path] : files.pages) {
+            if (number != expected) break;
+            audio::OggOpusScan scan;
+            try {
+                scan = audio::scan_ogg_opus(path, packets);
+            } catch (const std::exception&) {
+                break;
+            }
+            if (expected == 1) pages_lookahead = scan.pre_skip / 3;
+            if (scan.packets > 0) {
+                pages.push_back(Track::File{path, packets, scan.packets, scan.pages});
+                packets += scan.packets;
+            }
+            if (!scan.complete) break;
+            ++expected;
+        }
+        const std::int64_t pages_total =
+            std::max<std::int64_t>(0, packets * kFrame - pages_lookahead);
+
+        auto t = std::make_unique<Track>();
+        t->name = name;
+        t->label = name;
+        t->stem = stem;
+        t->sealed = true;
+        t->joined = true;
+        if (pages_total > joined_total) {
+            t->files = std::move(pages);
+            t->total = pages_total;
+            t->lookahead = pages_lookahead;
+            t->fed = packets * kFrame;
+            t->from_pages = true;
+        } else {
+            t->files = std::move(joined);
+            t->total = joined_total;
+            t->lookahead = joined_lookahead;
+            t->fed = t->files.empty() ? 0 : t->files.front().packets * kFrame;
+        }
+        if (t->total == 0) continue;
+        t->runs.emplace_back(0, t->total);
+        t->build_envelope();
+        tape->tracks_.push_back(std::move(t));
+    }
+    return tape;
+}
 
 Tape::~Tape() = default;
 
@@ -421,6 +590,9 @@ Tape::Track& Tape::add_locked(const std::string& name, const std::string& label)
 
 void Tape::add_track(const std::string& name, const std::string& label) {
     std::lock_guard<std::mutex> lock(mu_);
+    if (read_only_) {
+        throw StateError("the tape is open read-only");
+    }
     if (closed_) {
         throw StateError("the tape is closed");
     }
@@ -459,6 +631,9 @@ std::int64_t Tape::begin_run(Track& track) {
 
 std::unique_ptr<Tape::Writer> Tape::attach(const std::string& name) {
     std::lock_guard<std::mutex> lock(mu_);
+    if (read_only_) {
+        throw StateError("the tape is open read-only");
+    }
     if (closed_) {
         throw StateError("the tape is closed");
     }
@@ -535,6 +710,45 @@ std::size_t Tape::read_peaks(const std::string& name, std::int64_t start_ms, std
     }
     std::lock_guard<std::mutex> lock(track->mu);
     return track->envelope.read(start_ms, end_ms, bucket_ms, out, cap, limit_cells);
+}
+
+void Tape::Track::build_envelope() {
+    int status = OPUS_OK;
+    DecoderPtr dec(opus_decoder_create(kRate, 1, &status));
+    if (status != OPUS_OK || !dec) {
+        throw std::runtime_error(std::string("cannot create the Opus decoder: ") +
+                                 opus_strerror(status));
+    }
+    std::int16_t frame[kFrame];
+    std::int64_t output = 0;  // samples decoded so far; input n is output n + lookahead
+    std::vector<std::vector<std::uint8_t>> packets;
+    for (const File& f : files) {
+        std::ifstream in(f.path, std::ios::binary);
+        if (!in) {
+            throw std::runtime_error("cannot open the tape file " + f.path.filename().string());
+        }
+        for (const auto& page : f.pages) {
+            packets.clear();
+            audio::read_ogg_packets(in, page.offset, packets);
+            for (const auto& packet : packets) {
+                const int n =
+                    opus_decode(dec.get(), packet.data(), static_cast<opus_int32>(packet.size()),
+                                frame, static_cast<int>(kFrame), 0);
+                if (n != kFrame) {
+                    throw std::runtime_error(std::string("Opus decoding failed: ") +
+                                             (n < 0 ? opus_strerror(n) : "short frame"));
+                }
+                // The part of this frame that is input [0, total).
+                const std::int64_t from = std::max<std::int64_t>(output, lookahead);
+                const std::int64_t to = std::min(output + kFrame, total + lookahead);
+                if (to > from) {
+                    envelope.append(std::span<const std::int16_t>(
+                        frame + (from - output), static_cast<std::size_t>(to - from)));
+                }
+                output += kFrame;
+            }
+        }
+    }
 }
 
 void Tape::Track::decode_plan(const Plan& plan, std::int64_t q0, std::int64_t q1,
@@ -793,7 +1007,7 @@ std::string Tape::tracks_json() const {
         }
         nlohmann::json entry = {{"name", t->name},
                                 {"label", t->label},
-                                {"file", folder_.empty() ? "" : t->stem + ".opus"},
+                                {"file", folder_.empty() || t->from_pages ? "" : t->stem + ".opus"},
                                 {"duration_ms", t->total / kSamplesPerMs},
                                 {"writing", t->writing},
                                 {"runs", std::move(runs)}};
@@ -802,8 +1016,10 @@ std::string Tape::tracks_json() const {
         }
         tracks.push_back(std::move(entry));
     }
-    nlohmann::json root = {
-        {"duration_ms", end / kSamplesPerMs}, {"closed", closed_}, {"tracks", std::move(tracks)}};
+    nlohmann::json root = {{"duration_ms", end / kSamplesPerMs},
+                           {"closed", closed_},
+                           {"read_only", read_only_},
+                           {"tracks", std::move(tracks)}};
     return root.dump();
 }
 

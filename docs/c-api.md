@@ -540,6 +540,25 @@ echoir_status echoir_tape_close(echoir_tape* tape);
 missing. NULL or `""` keeps the audio in memory only. Files of the same names in the folder are
 replaced. It returns NULL on failure.
 
+```c
+echoir_tape*  echoir_tape_open(const char* folder);
+```
+
+`echoir_tape_open()` opens the files a tape left in `folder` as a read-only tape, for example to
+replay a recording saved earlier. Each track is `<track>.opus`, or its page files
+`<track>.00001.opus` and on, which a process that ended without `echoir_tape_close()` leaves,
+whichever holds more of the track. Page files are read in order from the first; a missing number or a
+page that does not check out ends the track there, so a page file cut short by a crash still gives the
+audio before the cut. Other files in the folder, such as clips cut from a track, are not tracks.
+Every track is decoded once to build its level envelope, so run it off the UI thread.
+
+The tape writes nothing. It is closed, `echoir_tape_add_track()` and `echoir_session_create()` with
+it return `ECHOIR_ERR_STATE`, and `echoir_tape_checkpoint()` and `echoir_tape_close()` do nothing.
+The reads, `echoir_tape_tracks_json()` and `echoir_tape_duration_ms()` work as on any tape. Each
+track has one run, the whole track, and its label is its name; `read_only` is true in the JSON. It
+returns NULL, with `ECHOIR_ERR_INVALID_ARG` for a NULL or empty folder, when the folder is not a
+directory or a file of a track cannot be read. An empty folder gives a tape with no tracks.
+
 `echoir_tape_checkpoint()` writes `<track>.opus` for every track that has audio while the tape stays
 open: a complete, standard Ogg Opus file of everything the track holds so far. The page files are
 copied into it and the audio still in memory is encoded for it, on a copy of the track's encoder, so
@@ -573,14 +592,15 @@ echoir_status echoir_tape_duration_ms(echoir_tape* tape, int64_t* out_ms);
 `echoir_tape_tracks_json()` returns the tracks:
 
 ```json
-{"duration_ms": 185000, "closed": false,
+{"duration_ms": 185000, "closed": false, "read_only": false,
  "tracks": [{"name": "mic", "label": "Microphone", "file": "mic.opus", "duration_ms": 185000,
              "writing": true, "runs": [{"start_ms": 0, "end_ms": 61000},
                                        {"start_ms": 61010, "end_ms": 185000}]}]}
 ```
 
-`file` is the name of the track's joined file in the folder (`""` without a folder); it exists after
-`echoir_tape_checkpoint()` or `echoir_tape_close()`. `writing` is true while a session writes the track. `runs` are the stretches
+`read_only` is true for a tape from `echoir_tape_open()`. `file` is the name of the track's joined
+file in the folder (`""` without a folder, and for a track that `echoir_tape_open()` read from page
+files); it exists after `echoir_tape_checkpoint()` or `echoir_tape_close()`. `writing` is true while a session writes the track. `runs` are the stretches
 that sessions wrote, in order, so the seams are between them. A track has an `error` field only when a
 page file could not be written: the audio then stays in memory and the write is tried again when the
 next minute has filled.

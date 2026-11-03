@@ -349,18 +349,32 @@ ECHOIR_API echoir_status  echoir_session_tape_offset_ms(echoir_session*, int64_t
 // tape with echoir_tape_free().
 ECHOIR_API echoir_tape*   echoir_tape_create(const char* folder);
 
+// Opens the files a tape left in folder (UTF-8) as a read-only tape, such as a recording saved
+// earlier. Each track is <track>.opus, or its page files <track>.00001.opus and on, which a
+// process that ended without echoir_tape_close() leaves, whichever holds more of the track. Page
+// files are read in order from the first; a missing number or a page that does not check out
+// ends the track there. Other files in the folder are not tracks. Every track is decoded once to
+// build its level envelope, so run it off the UI thread. The tape writes nothing: it is closed,
+// echoir_tape_add_track() and a session given it fail with ECHOIR_ERR_STATE, and
+// echoir_tape_checkpoint() and echoir_tape_close() do nothing. echoir_tape_read_audio(),
+// echoir_tape_read_peaks(), echoir_tape_tracks_json() and echoir_tape_duration_ms() work. Each
+// track has one run, the whole track, and its label is its name. Returns NULL when folder is not
+// a directory or a file of a track cannot be read. Free the tape with echoir_tape_free().
+ECHOIR_API echoir_tape*   echoir_tape_open(const char* folder);
+
 // Adds a track. name is 1 to 64 bytes of UTF-8 and must differ from every other track name when
 // ASCII case is ignored. label is the name to show; NULL or "" means the name. Returns
 // ECHOIR_ERR_INVALID_ARG for a bad or taken name, and ECHOIR_ERR_STATE after echoir_tape_close().
 ECHOIR_API echoir_status  echoir_tape_add_track(echoir_tape*, const char* name, const char* label);
 
 // The tracks as JSON, UTF-8:
-//   {"duration_ms":N,"closed":bool,
+//   {"duration_ms":N,"closed":bool,"read_only":bool,
 //    "tracks":[{"name","label","file","duration_ms","writing","runs":[{"start_ms","end_ms"}],
 //               "error"}]}
-// duration_ms of the tape is that of its longest track. file is the name of the track's joined
-// file in the folder, written by echoir_tape_checkpoint() and echoir_tape_close() ("" without a
-// folder). writing is true while
+// duration_ms of the tape is that of its longest track. read_only is true for a tape from
+// echoir_tape_open(). file is the name of the track's joined file in the folder, written by
+// echoir_tape_checkpoint() and echoir_tape_close() ("" without a folder, and for a track that
+// echoir_tape_open() read from page files). writing is true while
 // a session writes the track. runs are the stretches that sessions wrote, in order; a seam is
 // where one ends and the next starts. error, present only when a page file could not be written,
 // is the reason: the audio stays in memory and the write is tried again a minute later. The
