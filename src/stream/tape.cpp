@@ -145,8 +145,7 @@ bool name_of_stem(const std::string& stem, std::string& name) {
 // "<stem>.<digits>.opus" that number. False for any other name.
 bool split_tape_file(const std::string& file, std::string& stem, long& page) {
     const std::string ext = ".opus";
-    if (file.size() <= ext.size() ||
-        file.compare(file.size() - ext.size(), ext.size(), ext) != 0) {
+    if (file.size() <= ext.size() || file.compare(file.size() - ext.size(), ext.size(), ext) != 0) {
         return false;
     }
     const std::string base = file.substr(0, file.size() - ext.size());
@@ -1017,11 +1016,10 @@ std::string Tape::tracks_json() const {
         }
         tracks.push_back(std::move(entry));
     }
-    nlohmann::json root = {
-        {"duration_ms", end / kSamplesPerMs},
-        {"closed", closed_},
-        {"read_only", read_only_},
-        {"tracks", std::move(tracks)}};
+    nlohmann::json root = {{"duration_ms", end / kSamplesPerMs},
+                           {"closed", closed_},
+                           {"read_only", read_only_},
+                           {"tracks", std::move(tracks)}};
     return root.dump();
 }
 
