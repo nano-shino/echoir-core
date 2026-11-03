@@ -38,7 +38,7 @@ failure.
 | `ECHOIR_ERR_INVALID_ARG` | A NULL or out-of-range argument, such as a bad sample rate. |
 | `ECHOIR_ERR_MODEL_LOAD` | A model file is missing, unreadable or not the expected format. |
 | `ECHOIR_ERR_BACKEND` | A backend (whisper.cpp or llama.cpp) failed to set up or decode. |
-| `ECHOIR_ERR_STATE` | The call is not valid now: wrong driving mode, or the engine already serves a session. `echoir_session_poll()` also returns it for an empty queue, which is not a failure. |
+| `ECHOIR_ERR_STATE` | The call is not valid now, such as the wrong driving mode. `echoir_session_poll()` also returns it for an empty queue, which is not a failure. |
 | `ECHOIR_ERR_NOT_IMPLEMENTED` | The function is declared but not available in this build. |
 | `ECHOIR_ERR_INTERNAL` | An unexpected failure inside the core. |
 
@@ -80,7 +80,8 @@ the JSON text that the library returns.
 
 ### Threading
 
-- A handle (engine or session) is used by one thread at a time.
+- A handle (engine or session) is used by one thread at a time. Sessions of one engine are separate
+  handles, so each may be driven on its own thread.
 - `echoir_session_push_f32()`, `echoir_session_push_s16()`, `echoir_session_read_audio()`,
   `echoir_session_read_peaks()`, `echoir_session_set_input_muted()` and `echoir_session_read_lag()`
   are thread-safe. They can run on any thread, in either driving mode.
@@ -308,9 +309,16 @@ echoir_session* echoir_session_create(echoir_engine* engine, const echoir_sessio
                                       echoir_event_cb cb, void* user);
 ```
 
-Creates a session on `engine`, or returns NULL. It fails if the engine already serves a session, if
-`max_segment_ms` is below 200, or if `stream_policy` is unknown or is `ECHOIR_POLICY_ROLLBACK` on a
-backend without decoder-prefix support. `*params` is read during this call only.
+Creates a session on `engine`, or returns NULL. It fails if `max_segment_ms` is below 200, or if
+`stream_policy` is unknown or is `ECHOIR_POLICY_ROLLBACK` on a backend without decoder-prefix support.
+`*params` is read during this call only.
+
+An engine serves any number of sessions, for example one per audio source. They share its models:
+each VAD run and each decode takes a turn on the engine, in the order the sessions ask, so the
+sessions never decode at the same time and each one's decodes add to the others' lag. A session's
+events are the same as when it runs alone. STATS reports the time a session waited for its turns as
+`wait_ms`. A session's run on a tape starts at the tape's end when the session is created, so create
+every session of a recording before any of them takes audio, and their tracks start together.
 
 A non-NULL `cb` selects callback mode. A NULL `cb` selects queue mode. The mode cannot change after
 creation. `user` is passed back to `cb` unchanged. The engine must stay valid until the session is
@@ -737,7 +745,7 @@ The `detail` of a STATS event is a JSON object:
 
 ```json
 {"rtf":0.12,"decode_ms":180,"window_ms":2600,"ticks":10,"new_ms":1000,"speech_ms":800,
- "decode_max_ms":400,"load":0.18,"speech_rtf":0.2,"backend":"qwen3-asr"}
+ "decode_max_ms":400,"load":0.18,"speech_rtf":0.2,"wait_ms":0,"backend":"qwen3-asr"}
 ```
 
 `rtf` is the decode time over the audio time of the windows, carried audio included. `decode_ms` and
@@ -747,7 +755,10 @@ the speech it decoded, and `decode_max_ms` the slowest tick. `load` is the decod
 audio, the share of real time the decoder is busy. Once a decode takes longer than `min_chunk_ms`,
 ticks run back to back and `load` stays near 1 even while the session keeps up; use
 `echoir_session_read_lag()` to tell whether the backlog grows. `speech_rtf` is the `rtf` over the
-ticks that decoded speech, and 0 when none did. `backend` names the backend.
+ticks that decoded speech, and 0 when none did. `wait_ms` is the mean time per tick the session
+waited while other sessions of the engine decoded; it is 0 for a session alone on its engine, and
+it is not part of `decode_ms`, `decode_max_ms`, `rtf`, `load` or `speech_rtf`, which stay the
+model's speed. `backend` names the backend.
 
 `detail` is NULL for every event type except ERROR and STATS.
 

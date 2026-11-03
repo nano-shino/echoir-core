@@ -10,7 +10,8 @@
  *    The void functions (the *_params_init and *_free calls) are the exception.
  *  - No C++ exception crosses this boundary.
  *  - A handle (engine or session) is used by one thread at a time. The echoir_session_push_*
- *    functions are the exception: they are thread-safe.
+ *    functions are the exception: they are thread-safe. Sessions of one engine are separate
+ *    handles, so each may be driven on its own thread.
  *  - Freeing NULL is a no-op.
  */
 #ifndef ECHOIR_ECHOIR_H
@@ -49,9 +50,9 @@ extern "C" {
 //   ECHOIR_ERR_INVALID_ARG       a NULL or out-of-range argument, such as a bad sample rate.
 //   ECHOIR_ERR_MODEL_LOAD        a model file is missing, unreadable or not the expected format.
 //   ECHOIR_ERR_BACKEND           a backend (whisper.cpp or llama.cpp) failed to set up or decode.
-//   ECHOIR_ERR_STATE             the call is not valid now: wrong driving mode, or the engine
-//                                already serves a session. echoir_session_poll() also returns it
-//                                for an empty queue, which is not a failure.
+//   ECHOIR_ERR_STATE             the call is not valid now, such as the wrong driving mode.
+//                                echoir_session_poll() also returns it for an empty queue, which
+//                                is not a failure.
 //   ECHOIR_ERR_NOT_IMPLEMENTED   the function is declared but not available in this build.
 //   ECHOIR_ERR_INTERNAL          an unexpected failure inside the core.
 typedef enum { ECHOIR_OK = 0, ECHOIR_ERR_INVALID_ARG, ECHOIR_ERR_MODEL_LOAD,
@@ -123,8 +124,10 @@ typedef struct {
 //   CLEARED  the transcript was cleared by echoir_session_clear(). Drop what is shown.
 //   ERROR    a failure while streaming. detail holds the message.
 //   STATS    speed of the recent ticks, after every 10 ticks that decode audio. detail holds a JSON
-//            object: {"rtf","decode_ms","window_ms","backend"}. rtf is decode time over audio time;
-//            decode_ms and window_ms are the mean per tick. start_ms and end_ms are 0.
+//            object: {"rtf","decode_ms","window_ms","wait_ms","backend",...}. rtf is decode time
+//            over audio time; decode_ms and window_ms are the mean per tick. wait_ms is the mean
+//            time per tick spent waiting for other sessions of the engine, which decode_ms and rtf
+//            leave out. start_ms and end_ms are 0.
 typedef enum { ECHOIR_EVENT_PARTIAL = 1, ECHOIR_EVENT_FINAL = 2, ECHOIR_EVENT_CLEARED = 3,
                ECHOIR_EVENT_ERROR = 4, ECHOIR_EVENT_STATS = 5 } echoir_event_type;
 
@@ -144,8 +147,9 @@ typedef struct {
 // callback must not call any function on its own session, except echoir_session_push_*.
 typedef void (*echoir_event_cb)(const echoir_event* ev, void* user);
 
-// Loaded models. Heavy to create, so create one, reuse it and free it when done. An engine
-// serves one session at a time.
+// Loaded models. Heavy to create, so create one, reuse it and free it when done. An engine serves
+// any number of sessions. Their VAD runs and decodes take turns on it in arrival order, so each
+// adds to the others' lag; a session's events are the same as when it runs alone.
 typedef struct echoir_engine  echoir_engine;
 // Streaming state over one engine. Free it before the engine it was created from.
 typedef struct echoir_session echoir_session;
@@ -181,9 +185,11 @@ ECHOIR_API echoir_engine* echoir_engine_create(const echoir_engine_params*);
 // Frees an engine and its models. Free its sessions first.
 ECHOIR_API void           echoir_engine_free(echoir_engine*);
 
-// Creates a session on engine, or returns NULL on failure (for example when the engine already
-// serves a session, max_segment_ms is below 200, or stream_policy is unknown or ROLLBACK on a
-// backend without prefix support). *params is read during this call only. With cb
+// Creates a session on engine, or returns NULL on failure (for example when max_segment_ms is
+// below 200, or stream_policy is unknown or ROLLBACK on a backend without prefix support). An
+// engine may already serve other sessions. A session's run on a tape starts at the tape's end when
+// the session is created, so create every session of a recording before any of them takes audio
+// to give their tracks the same start. *params is read during this call only. With cb
 // set (callback mode), events go to cb on the driving thread. With cb NULL (queue mode), events
 // wait for echoir_session_poll(). The mode is fixed here. user is passed back to cb unchanged. The
 // engine and, in callback mode, cb and user must stay valid until the session is freed.

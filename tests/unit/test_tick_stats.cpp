@@ -64,13 +64,26 @@ TEST_CASE("tick stats: an empty window gives rtf 0, and reset starts a new run")
 
 TEST_CASE("stats json: one object with rtf, decode_ms, window_ms and backend") {
     const std::string text = echoir::stats_json(
-        TickSummary{0.12, 180, 2600, 10, 1000, 800, 400, 0.18, 0.2}, "qwen3-asr");
+        TickSummary{0.12, 180, 2600, 10, 1000, 800, 400, 0.18, 0.2, 35}, "qwen3-asr");
     CHECK(nlohmann::json::parse(text) ==
           nlohmann::json::parse(
               R"({"rtf":0.12,"decode_ms":180,"window_ms":2600,"ticks":10,"new_ms":1000,)"
               R"("speech_ms":800,"decode_max_ms":400,"load":0.18,"speech_rtf":0.2,)"
-              R"("backend":"qwen3-asr"})"));
+              R"("wait_ms":35,"backend":"qwen3-asr"})"));
     CHECK(text.find('\n') == std::string::npos);
+}
+
+TEST_CASE("tick stats: wait_ms is the mean wait per tick and stays out of rtf") {
+    TickStats stats;
+    stats.add(100.0, 1000.0, 500.0, 0.0, 30.0);
+    stats.add(100.0, 1000.0, 500.0, 0.0, 0.0);
+    const TickSummary summary = stats.summary();
+    CHECK(summary.wait_ms == 15);
+    CHECK(summary.rtf == doctest::Approx(0.1));
+    CHECK(summary.decode_ms == 100);
+    stats.reset();
+    stats.add(100.0, 1000.0);
+    CHECK(stats.summary().wait_ms == 0);
 }
 
 TEST_CASE("stats json: rtf keeps four decimals") {

@@ -25,6 +25,11 @@
 //    the sink for its events. stop() joins the worker, so no worker sink call runs after stop()
 //    returns.
 //
+// Several sessions may share one decoder and one VAD, each driven on its own thread. They then
+// share an EngineGate (stream/engine_gate.h): every VAD call and decode takes a turn of the gate,
+// so they never overlap, and turns go in the order they were asked for. A session's events are the
+// same as when it runs alone; only their timing changes.
+//
 // Threads: push() may be called from any thread and never waits for a decode. process(), flush()
 // and reset() run one at a time. clear() may run at any time. flush(), reset() and clear() run
 // their sink on the calling thread, in live mode too. stop() waits for such a call that is still
@@ -49,6 +54,7 @@
 #include "backends/asr_backend.h"
 #include "echoir/echoir.h"
 #include "stream/audio_store.h"
+#include "stream/engine_gate.h"
 #include "stream/tape.h"
 #include "stream/tick_stats.h"
 #include "text/stabilizer.h"
@@ -123,7 +129,10 @@ public:
     // is negative, if retain_audio_ms is negative, if the policy is rollback and the backend has no
     // prefix support, if sink is empty, or if a tape is given with a bad track name. Throws
     // StateError when the tape is closed or its track already has a writer.
-    Session(IAsrBackend& backend, vad::IVad& vad, SessionConfig config, SessionSink sink);
+    // Sessions that share backend and vad must share gate too. A null gate gives the session a gate
+    // of its own, for a backend and a VAD that only this session uses.
+    Session(IAsrBackend& backend, vad::IVad& vad, SessionConfig config, SessionSink sink,
+            std::shared_ptr<stream::EngineGate> gate = nullptr);
     // Stops the worker, if one runs. Destroying the session from its own sink aborts the process:
     // the worker would keep running on members that are already gone.
     ~Session();
@@ -248,9 +257,11 @@ private:
     // time of window[0], in samples. Returns the window index where the carried audio starts.
     // With finish set, it finalizes the ongoing segment and returns the window size. The one
     // exception is a forced cut, which returns the cut: the remainder still needs a decode.
-    // speech_samples is increased by the length of the speech ranges that were decoded.
+    // speech_samples is increased by the length of the speech ranges that were decoded, and
+    // wait_ms by the time spent waiting for the gate.
     std::size_t analyze(const std::vector<float>& window, bool finish, std::int64_t origin,
-                        State& st, std::vector<SessionEvent>& events, std::int64_t& speech_samples);
+                        State& st, std::vector<SessionEvent>& events, std::int64_t& speech_samples,
+                        double& wait_ms);
     // Sends the events in order, skipping text from before the generation was bumped by clear().
     void deliver(const std::vector<SessionEvent>& events, std::uint64_t generation);
     void emit_locked(const SessionEvent& event);
@@ -277,6 +288,8 @@ private:
 
     IAsrBackend& backend_;
     vad::IVad& vad_;
+    // Taken around every call into backend_ and vad_, which other sessions may share.
+    std::shared_ptr<stream::EngineGate> gate_;
     SessionConfig config_;
     SessionSink sink_;
     std::int64_t min_chunk_samples_ = 0;
@@ -284,7 +297,8 @@ private:
 
     // Lock order: lifecycle_mu_, decode_mu_, worker_mu_, then audio_mu_ or text_mu_. audio_mu_ and
     // text_mu_ are never held together. worker_mu_ is never held across a decode. The store's own
-    // lock is taken last, under audio_mu_ or alone.
+    // lock is taken last, under audio_mu_ or alone. A turn of gate_ is taken under decode_mu_ with
+    // no other lock held, and no lock is taken during a turn.
     std::mutex lifecycle_mu_;  // start and stop, so the worker handle is changed by one caller
     std::mutex decode_mu_;     // held for a whole tick by process, flush, reset and the worker
     std::mutex audio_mu_;      // pending_ and resampler_; push holds it only while converting

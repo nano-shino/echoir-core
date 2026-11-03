@@ -1,7 +1,6 @@
 // C ABI entry points. Without the VAD and backends (ECHOIR_HAS_ENGINE undefined), the engine and
 // session calls report that the backends are missing. The version, the *_params_init calls, the
 // device list and the catalogue work in every build.
-#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
@@ -27,6 +26,7 @@
 
 #ifdef ECHOIR_HAS_ENGINE
 #include "backends/asr_backend.h"
+#include "stream/engine_gate.h"
 #include "stream/event_queue.h"
 #include "stream/session.h"
 #include "vad/vad.h"
@@ -101,12 +101,13 @@ struct echoir_tape {
 };
 
 #ifdef ECHOIR_HAS_ENGINE
-// What echoir_engine_create loads. A session takes the backend and the VAD from here, and at most
-// one session can be open on an engine.
+// What echoir_engine_create loads. Its sessions share the backend and the VAD, and take turns on
+// them through the gate.
 struct echoir_engine {
     std::unique_ptr<echoir::IAsrBackend> backend;
     std::unique_ptr<echoir::vad::IVad> vad;
-    std::atomic<bool> session_open{false};
+    std::shared_ptr<echoir::stream::EngineGate> gate =
+        std::make_shared<echoir::stream::EngineGate>();
 };
 #else
 // Without the VAD and the backends there is nothing to load.
@@ -470,11 +471,6 @@ echoir_session* echoir_session_create(echoir_engine* engine, const echoir_sessio
         set_last_error(fn, "engine must not be NULL", ECHOIR_ERR_INVALID_ARG);
         return nullptr;
     }
-    bool expected = false;
-    if (!engine->session_open.compare_exchange_strong(expected, true)) {
-        set_last_error(fn, "the engine already serves a session", ECHOIR_ERR_STATE);
-        return nullptr;
-    }
     try {
         auto s = std::make_unique<echoir_session>();
         s->engine = engine;
@@ -495,24 +491,16 @@ echoir_session* echoir_session_create(echoir_engine* engine, const echoir_sessio
                 raw->queue->push(ev);
             }
         };
-        s->session = std::make_unique<echoir::Session>(*engine->backend, *engine->vad,
-                                                       std::move(config), std::move(sink));
+        s->session = std::make_unique<echoir::Session>(
+            *engine->backend, *engine->vad, std::move(config), std::move(sink), engine->gate);
         return s.release();
     } catch (...) {
-        engine->session_open.store(false);
         status_of_current_exception(fn);
         return nullptr;
     }
 }
 
-void echoir_session_free(echoir_session* s) {
-    if (s == nullptr) {
-        return;
-    }
-    echoir_engine* engine = s->engine;
-    delete s;
-    engine->session_open.store(false);
-}
+void echoir_session_free(echoir_session* s) { delete s; }
 
 echoir_status echoir_session_poll(echoir_session* s, echoir_event* out) {
     const char* fn = "echoir_session_poll";

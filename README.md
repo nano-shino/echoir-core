@@ -16,7 +16,8 @@ before the first release.
 
 - Two speech recognition backends: Whisper (whisper.cpp) and Qwen3-ASR (llama.cpp libmtmd).
 - Streaming sessions that report partial and final segments with timestamps, driven by the host
-  or by a live worker thread.
+  or by a live worker thread. One loaded model serves several sessions at once, one per audio
+  source; their decodes take turns on it.
 - Voice activity detection with Silero and FireRedVAD.
 - Live capture from microphones, and from loopback devices on Windows, through miniaudio.
 - A session tape that keeps the audio of a whole recording across sessions and model switches, on
