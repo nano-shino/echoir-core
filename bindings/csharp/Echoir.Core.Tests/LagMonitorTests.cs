@@ -83,7 +83,7 @@ public sealed class LagMonitorTests
     public void StatsParseReadsEveryField()
     {
         TranscriberStats? stats = TranscriberStats.Parse(
-            """{"rtf":0.12,"decode_ms":180,"window_ms":2600,"ticks":10,"new_ms":1000,"speech_ms":800,"decode_max_ms":400,"load":0.18,"speech_rtf":0.2,"backend":"qwen3-asr"}""");
+            """{"rtf":0.12,"decode_ms":180,"window_ms":2600,"ticks":10,"new_ms":1000,"speech_ms":800,"decode_max_ms":400,"load":0.18,"speech_rtf":0.2,"wait_ms":35,"backend":"qwen3-asr"}""");
         Assert.IsNotNull(stats);
         Assert.AreEqual(0.12, stats.Rtf, 1e-9);
         Assert.AreEqual(0.18, stats.Load, 1e-9);
@@ -94,6 +94,7 @@ public sealed class LagMonitorTests
         Assert.AreEqual(1000, stats.NewMs);
         Assert.AreEqual(800, stats.SpeechMs);
         Assert.AreEqual(400, stats.DecodeMaxMs);
+        Assert.AreEqual(35, stats.WaitMs);
         Assert.AreEqual("qwen3-asr", stats.Backend);
     }
 
@@ -104,6 +105,7 @@ public sealed class LagMonitorTests
         Assert.IsNotNull(old);
         Assert.AreEqual(0, old.Load);
         Assert.AreEqual(0, old.SpeechMs);
+        Assert.AreEqual(0, old.WaitMs);
         Assert.AreEqual("whisper", old.Backend);
         Assert.IsNull(TranscriberStats.Parse("[1,2]"));
         Assert.IsNull(TranscriberStats.Parse("not json"));

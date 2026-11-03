@@ -68,6 +68,10 @@ public sealed record TranscriberStats
     // The slowest tick, in ms.
     public int DecodeMaxMs { get; init; }
 
+    // Mean time per tick spent waiting while other transcribers on the same EchoirEngine decoded,
+    // in ms. Not part of DecodeMs or Rtf; 0 for a transcriber alone on its model.
+    public int WaitMs { get; init; }
+
     public string Backend { get; init; } = string.Empty;
 
     // Reads the detail of a STATS event. Fields the core did not send stay zero. Null for text that
@@ -93,6 +97,7 @@ public sealed record TranscriberStats
                 NewMs = (int)Number(root, "new_ms"),
                 SpeechMs = (int)Number(root, "speech_ms"),
                 DecodeMaxMs = (int)Number(root, "decode_max_ms"),
+                WaitMs = (int)Number(root, "wait_ms"),
                 Backend = root.TryGetProperty("backend", out JsonElement backend) && backend.ValueKind == JsonValueKind.String
                     ? backend.GetString() ?? string.Empty
                     : string.Empty,

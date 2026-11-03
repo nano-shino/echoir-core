@@ -4,6 +4,8 @@ using Echoir.Core.Native;
 namespace Echoir.Core;
 
 // Live transcription over one loaded model. Load a model, Start a source, then read Transcript.
+// One transcriber transcribes one source at a time. For several sources at once, load the model
+// once as an EchoirEngine and make one transcriber per source on it.
 //
 // The session runs in the core's queue mode. A background thread takes its events about 30
 // times a second, and each batch is raised on the SynchronizationContext that was current at
@@ -34,6 +36,11 @@ public sealed class EchoirTranscriber : IDisposable, IAsyncDisposable
     private readonly Transcript _transcript = new();
 
     private EngineHandle? _engine;
+
+    // True for a transcriber made on an EchoirEngine: the engine is not its own, so LoadAsync is
+    // refused and Dispose leaves the engine loaded.
+    private readonly bool _sharedEngine;
+    private readonly EchoirEngine? _owner;
     private SessionHandle? _session;
     private AudioSource _source;
     private bool _running;
@@ -62,6 +69,23 @@ public sealed class EchoirTranscriber : IDisposable, IAsyncDisposable
     private double _speechMs;
     private long _runStartedMs;
     private long _runEndedMs;
+
+    // A transcriber with no model. LoadAsync loads one that only this transcriber uses.
+    public EchoirTranscriber()
+    {
+    }
+
+    // A transcriber on a shared engine. Its sessions run on the engine beside those of the other
+    // transcribers made on it. LoadAsync throws InvalidOperationException, and Dispose does not
+    // free the engine.
+    public EchoirTranscriber(EchoirEngine engine)
+    {
+        ArgumentNullException.ThrowIfNull(engine);
+        ObjectDisposedException.ThrowIf(engine.IsDisposed, engine);
+        _engine = engine.Handle;
+        _sharedEngine = true;
+        _owner = engine;
+    }
 
     // The text of the session. Read it on the context the changes are raised on.
     public Transcript Transcript => _transcript;
@@ -150,7 +174,7 @@ public sealed class EchoirTranscriber : IDisposable, IAsyncDisposable
         {
             lock (_native)
             {
-                return _engine is not null;
+                return _engine is not null && _owner?.IsDisposed != true;
             }
         }
     }
@@ -251,7 +275,8 @@ public sealed class EchoirTranscriber : IDisposable, IAsyncDisposable
     // Loads a model and its VAD (vadId null: the model's default VAD) from modelsDir, on a thread
     // pool thread. A session that runs on the previous model is stopped first, and the previous
     // engine is freed. Model files that are missing or have the wrong size fail with an
-    // EchoirException.
+    // EchoirException. A transcriber made on an EchoirEngine throws InvalidOperationException:
+    // load another EchoirEngine instead.
     public async Task LoadAsync(
         string modelId,
         string modelsDir,
@@ -262,6 +287,11 @@ public sealed class EchoirTranscriber : IDisposable, IAsyncDisposable
         ArgumentException.ThrowIfNullOrEmpty(modelId);
         ArgumentException.ThrowIfNullOrEmpty(modelsDir);
         ObjectDisposedException.ThrowIf(_disposed, this);
+        if (_sharedEngine)
+        {
+            throw new InvalidOperationException(
+                "This transcriber runs on a shared EchoirEngine. Load another EchoirEngine instead.");
+        }
 
         await _loadGate.WaitAsync(cancellationToken);
         try
@@ -322,8 +352,13 @@ public sealed class EchoirTranscriber : IDisposable, IAsyncDisposable
                 throw new InvalidOperationException("TranscribeSamplesAsync is running. Wait for it first.");
             }
 
-            // Each run gets its own session. The engine serves one session at a time, so the
-            // stopped one goes first.
+            // No new session on a disposed shared engine.
+            if (_owner?.IsDisposed == true)
+            {
+                throw new ObjectDisposedException(nameof(EchoirEngine));
+            }
+
+            // Each run gets its own session, and the stopped one goes first.
             ReleaseSessionLocked();
             string track = options.TapeTrack ?? (source == AudioSource.Loopback ? "system" : "mic");
             _session = CreateSession(_engine, options, track);
@@ -545,7 +580,11 @@ public sealed class EchoirTranscriber : IDisposable, IAsyncDisposable
         {
             poller = StopLocked(out _);
             ReleaseSessionLocked();
-            _engine?.Dispose();
+            // A shared engine belongs to its EchoirEngine.
+            if (!_sharedEngine)
+            {
+                _engine?.Dispose();
+            }
             _engine = null;
         }
         if (poller is not null)
@@ -899,7 +938,7 @@ public sealed class EchoirTranscriber : IDisposable, IAsyncDisposable
         return Marshal.PtrToStringUTF8(pointer) ?? string.Empty;
     }
 
-    private static unsafe EngineHandle CreateEngine(string modelId, string modelsDir, string? vadId, bool useGpu)
+    internal static unsafe EngineHandle CreateEngine(string modelId, string modelsDir, string? vadId, bool useGpu)
     {
         using var model = Utf8String.Create(modelId);
         using var dir = Utf8String.Create(modelsDir);
@@ -922,7 +961,33 @@ public sealed class EchoirTranscriber : IDisposable, IAsyncDisposable
         return new EngineHandle(engine);
     }
 
+    // Throws ObjectDisposedException when the engine is a disposed EchoirEngine.
     private static unsafe SessionHandle CreateSession(EngineHandle engine, TranscriberOptions options, string? tapeTrack)
+    {
+        // The reference keeps the engine loaded during the call, and fails when it was disposed.
+        bool added = false;
+        try
+        {
+            engine.DangerousAddRef(ref added);
+        }
+        catch (ObjectDisposedException)
+        {
+            throw new ObjectDisposedException(nameof(EchoirEngine));
+        }
+        try
+        {
+            return CreateSessionOn(engine, options, tapeTrack);
+        }
+        finally
+        {
+            if (added)
+            {
+                engine.DangerousRelease();
+            }
+        }
+    }
+
+    private static unsafe SessionHandle CreateSessionOn(EngineHandle engine, TranscriberOptions options, string? tapeTrack)
     {
         using var language = Utf8String.Create(options.Language);
         using var track = Utf8String.Create(options.Tape is null ? null : tapeTrack);
@@ -959,8 +1024,8 @@ public sealed class EchoirTranscriber : IDisposable, IAsyncDisposable
     // Transcribes 16 kHz mono samples on the loaded model, apart from the live transcript: a
     // session of its own takes the samples, decodes them all, and the FINAL texts come back joined
     // by spaces. Nothing is raised and Transcript does not change. options.Tape is not used, so the
-    // audio is not written to a tape again. For re-decoding a stretch of a tape after a run: the
-    // engine serves one session at a time, so this throws InvalidOperationException while the
+    // audio is not written to a tape again. For re-decoding a stretch of a tape after a run: a
+    // transcriber runs one session at a time, so this throws InvalidOperationException while the
     // transcriber runs, and Start throws while this runs. Runs on a thread pool thread; a cancel is
     // seen between seconds of audio. An ERROR from the decoder fails it with an EchoirException.
     public async Task<string> TranscribeSamplesAsync(
@@ -983,7 +1048,11 @@ public sealed class EchoirTranscriber : IDisposable, IAsyncDisposable
             {
                 throw new InvalidOperationException("The transcriber is busy. Call StopAsync first.");
             }
-            // The engine serves one session at a time, so the stopped run's session goes first.
+            if (_owner?.IsDisposed == true)
+            {
+                throw new ObjectDisposedException(nameof(EchoirEngine));
+            }
+            // A transcriber keeps one session at a time, so the stopped run's session goes first.
             ReleaseSessionLocked();
             session = CreateSession(_engine, options, null);
             _transcribingSamples = true;
