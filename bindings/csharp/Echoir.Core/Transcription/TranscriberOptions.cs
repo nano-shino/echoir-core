@@ -50,7 +50,7 @@ public sealed record TranscriberOptions
     // The tape that keeps the run's audio, across runs and model switches. The run writes the
     // track TapeTrack, starting at the end of the tape, and TryReadAudio, ReadPeaks and Level read
     // through to it on the run's own timeline (TapeOffsetMs maps it to the tape). Null keeps the
-    // audio in the run (RetainAudio).
+    // audio in the run (RetainAudio). A read-only tape (EchoirTape.Open) is refused by Start.
     public EchoirTape? Tape { get; init; }
 
     // The track of Tape that the run writes. Null: "system" for the loopback source, "mic" for the

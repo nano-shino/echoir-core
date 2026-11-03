@@ -1,6 +1,6 @@
 // The session tape: memory and Opus pages, reads by range across both, seams between sessions
 // and inside one, several tracks, the envelope, the joined files of checkpoint() and close(), and
-// the C ABI. Sessions run on the
+// the C ABI, and opening a saved folder read-only. Sessions run on the
 // scripted backend and VAD from tests/support/live_fakes.h, pulled, so a push stores at once.
 #include <opus.h>
 
@@ -852,4 +852,210 @@ TEST_CASE("tape: the C ABI") {
     echoir_tape* memory = echoir_tape_create(nullptr);
     REQUIRE(memory != nullptr);
     echoir_tape_free(memory);  // free closes
+}
+
+namespace {
+
+// The name, size and write time of every entry in a folder, to show that nothing changed.
+std::vector<std::string> listing(const std::filesystem::path& folder) {
+    std::vector<std::string> out;
+    for (const auto& e : std::filesystem::directory_iterator(folder)) {
+        const std::uintmax_t size = e.is_regular_file() ? e.file_size() : 0;
+        out.push_back(e.path().filename().string() + " " + std::to_string(size) + " " +
+                      std::to_string(e.last_write_time().time_since_epoch().count()));
+    }
+    std::sort(out.begin(), out.end());
+    return out;
+}
+
+std::vector<float> peaks(const Tape& tape, const std::string& track) {
+    const std::size_t n = tape.read_peaks(track, 0, kAll, 10, nullptr, 0);
+    std::vector<float> out(n * 2);
+    tape.read_peaks(track, 0, kAll, 10, out.data(), n);
+    return out;
+}
+
+}  // namespace
+
+TEST_CASE("tape: open reads a closed tape back, read-only") {
+    TempFolder dir;
+    const std::vector<float> mic = voice(2 * kMinute * kSpm + 30000 * kSpm, 1);
+    const std::vector<float> sys = voice(30000 * kSpm, 2);
+    std::shared_ptr<Tape> written = Tape::create(dir.path);
+    written->add_track("system", "System audio");
+    {
+        Rig rig(written, "mic");
+        rig.push(mic);
+    }
+    {
+        Rig rig(written, "system");
+        rig.push(sys);
+    }
+    written->close();
+    // Entries that are not tracks of the tape.
+    std::filesystem::copy_file(dir.path / "mic.opus", dir.path / "clip 0m01s-0m02s.opus");
+    std::ofstream(dir.path / "notes.txt") << "notes";
+    std::ofstream(dir.path / "bad%zz.opus") << "x";
+    std::filesystem::create_directory(dir.path / "sub.opus");
+    const auto before = listing(dir.path);
+
+    auto tape = Tape::open(dir.path);
+    CHECK(tape->read_only());
+    CHECK(tape->closed());
+    CHECK(tape->duration_ms() == written->duration_ms());
+    const auto json = tracks(*tape);
+    CHECK(json["read_only"] == true);
+    CHECK(json["closed"] == true);
+    REQUIRE(json["tracks"].size() == 2);
+    // In name order, labelled with their names, one run each.
+    CHECK(json["tracks"][0]["name"] == "mic");
+    CHECK(json["tracks"][0]["label"] == "mic");
+    CHECK(json["tracks"][0]["file"] == "mic.opus");
+    CHECK(json["tracks"][0]["duration_ms"] == 150000);
+    CHECK(json["tracks"][0]["writing"] == false);
+    CHECK(json["tracks"][0]["runs"] ==
+          nlohmann::json::parse(R"([{"start_ms":0,"end_ms":150000}])"));
+    CHECK(json["tracks"][1]["name"] == "system");
+    CHECK(json["tracks"][1]["duration_ms"] == 180000);
+    CHECK(json["tracks"][1]["runs"] ==
+          nlohmann::json::parse(R"([{"start_ms":0,"end_ms":180000}])"));
+
+    // The same file decodes the same way: reads match the closed tape's to the sample.
+    const std::vector<std::pair<std::int64_t, std::int64_t>> ranges = {
+        {0, 1000}, {30000, 90000}, {149000, 150000}};
+    for (const auto& [from, to] : ranges) {
+        CHECK(read(*tape, "mic", from, to) == read(*written, "mic", from, to));
+    }
+    check_close(read(*tape, "mic", 30000, 90000), slice(to_s16(mic), 30000, 90000));
+    CHECK(max_abs(read(*tape, "system", 0, 140000)) < 50);  // the padding before its run
+    check_close(read(*tape, "system", 155000, 175000), slice(to_s16(sys), 5000, 25000));
+    CHECK(tape->read_audio("mic", 0, kAll, nullptr, 0) == 150000 * kSpm);
+    CHECK(tape->read_audio("mic", 150000, kAll, nullptr, 0) == 0);
+
+    // The envelope is that of the decoded track.
+    echoir::stream::Envelope expected;
+    expected.append(read(*written, "mic", 0, kAll));
+    std::vector<float> want(static_cast<std::size_t>(expected.cells()) * 2);
+    expected.read(0, kAll, 10, want.data(), want.size() / 2);
+    CHECK(peaks(*tape, "mic") == want);
+    CHECK(peaks(*tape, "system").size() == 18000 * 2);
+
+    // Nothing can write it, and nothing in the folder changes.
+    CHECK_THROWS_AS(tape->add_track("other", ""), echoir::StateError);
+    CHECK_THROWS_AS(tape->attach("mic"), echoir::StateError);
+    CHECK_THROWS_AS(tape->attach("other"), echoir::StateError);
+    {
+        ts::LiveBackend backend;
+        ts::LiveVad vad;
+        SessionConfig config;
+        config.tape = tape;
+        config.tape_track = "mic";
+        CHECK_THROWS_AS(Session(backend, vad, config, [](const SessionEvent&) {}),
+                        echoir::StateError);
+    }
+    tape->checkpoint();
+    tape->close();
+    tape.reset();
+    CHECK(listing(dir.path) == before);
+}
+
+TEST_CASE("tape: open reads the page files a process left without closing") {
+    TempFolder dir;
+    const std::vector<float> pcm = voice(5 * kMinute * kSpm + 30000 * kSpm, 4);
+    const std::vector<std::int16_t> s16 = to_s16(pcm);
+    std::shared_ptr<Tape> written = Tape::create(dir.path);
+    auto rig = std::make_unique<Rig>(written, "mic");
+    // A checkpoint at 2 min 30 s, then three more minutes: the page files then hold the first
+    // three minutes and a half (the newest two are in memory), more than the checkpoint file.
+    rig->push(std::vector<float>(pcm.begin(), pcm.begin() + 150000 * kSpm));
+    written->checkpoint();
+    rig->push(std::vector<float>(pcm.begin() + 150000 * kSpm, pcm.end()));
+    REQUIRE(on_disk(dir.path / "mic.opus"));
+    REQUIRE(on_disk(dir.path / "mic.00003.opus"));
+    REQUIRE_FALSE(on_disk(dir.path / "mic.00004.opus"));
+
+    {
+        auto tape = Tape::open(dir.path);
+        const auto json = tracks(*tape);
+        REQUIRE(json["tracks"].size() == 1);
+        CHECK(json["tracks"][0]["file"] == "");  // read from the page files
+        const std::int64_t ms = json["tracks"][0]["duration_ms"];
+        CHECK(ms > 3 * kMinute - 10);
+        CHECK(ms <= 3 * kMinute);
+        CHECK(read(*tape, "mic", 30000, 90000) == read(*written, "mic", 30000, 90000));
+        check_close(read(*tape, "mic", 150000, 170000), slice(s16, 150000, 170000));
+        CHECK(peaks(*tape, "mic").size() == static_cast<std::size_t>(ms / 10) * 2);
+    }
+
+    // A page file cut short ends the track inside it; the checkpoint file is longer then.
+    const auto page2 = dir.path / "mic.00002.opus";
+    std::filesystem::resize_file(page2, std::filesystem::file_size(page2) / 2);
+    {
+        auto tape = Tape::open(dir.path);
+        const auto json = tracks(*tape);
+        CHECK(json["tracks"][0]["file"] == "mic.opus");
+        CHECK(json["tracks"][0]["duration_ms"] == 150000);
+        check_close(read(*tape, "mic", 100000, 150000), slice(s16, 100000, 150000));
+    }
+    // Without the checkpoint file, the pages up to the cut.
+    std::filesystem::remove(dir.path / "mic.opus");
+    {
+        auto tape = Tape::open(dir.path);
+        const std::int64_t ms = tracks(*tape)["tracks"][0]["duration_ms"];
+        CHECK(ms > kMinute);
+        CHECK(ms < 2 * kMinute);
+        check_close(read(*tape, "mic", 10000, ms), slice(s16, 10000, ms));
+    }
+    // A missing first page leaves no track.
+    std::filesystem::remove(dir.path / "mic.00001.opus");
+    CHECK(Tape::open(dir.path)->duration_ms() == 0);
+    rig.reset();
+}
+
+TEST_CASE("tape: open through the C ABI") {
+    TempFolder dir;
+    {
+        auto written = Tape::create(dir.path);
+        Rig rig(written, "app:chat");
+        rig.push(voice(3000 * kSpm, 5));
+        rig.session.reset();
+        written->close();
+    }
+    REQUIRE(on_disk(dir.path / "app%3Achat.opus"));
+
+    CHECK(echoir_tape_open(nullptr) == nullptr);
+    CHECK(echoir_last_status() == ECHOIR_ERR_INVALID_ARG);
+    CHECK(echoir_tape_open("") == nullptr);
+    const std::string missing = (dir.path / "missing").string();
+    CHECK(echoir_tape_open(missing.c_str()) == nullptr);
+    CHECK(std::string(echoir_last_error()).find("echoir_tape_open") == 0);
+
+    const std::string folder = dir.path.string();
+    echoir_tape* tape = echoir_tape_open(folder.c_str());
+    REQUIRE(tape != nullptr);
+    const auto json = nlohmann::json::parse(echoir_tape_tracks_json(tape));
+    CHECK(json["read_only"] == true);
+    CHECK(json["tracks"][0]["name"] == "app:chat");
+    int64_t duration = 0;
+    CHECK(echoir_tape_duration_ms(tape, &duration) == ECHOIR_OK);
+    CHECK(duration == 3000);
+    size_t n = 0;
+    CHECK(echoir_tape_read_audio(tape, "app:chat", 0, kAll, nullptr, 0, &n) == ECHOIR_OK);
+    CHECK(n == static_cast<size_t>(3000 * kSpm));
+    CHECK(echoir_tape_read_peaks(tape, "app:chat", 0, kAll, 100, nullptr, 0, &n) == ECHOIR_OK);
+    CHECK(n == 30);
+    CHECK(echoir_tape_add_track(tape, "mic", nullptr) == ECHOIR_ERR_STATE);
+    CHECK(echoir_tape_checkpoint(tape) == ECHOIR_OK);
+    CHECK(echoir_tape_close(tape) == ECHOIR_OK);
+    echoir_tape_free(tape);
+    CHECK(on_disk(dir.path / "app%3Achat.opus"));
+
+    // An empty folder is a tape with no tracks.
+    TempFolder empty;
+    std::filesystem::create_directories(empty.path);
+    const std::string empty_folder = empty.path.string();
+    echoir_tape* none = echoir_tape_open(empty_folder.c_str());
+    REQUIRE(none != nullptr);
+    CHECK(nlohmann::json::parse(echoir_tape_tracks_json(none))["tracks"].empty());
+    echoir_tape_free(none);
 }

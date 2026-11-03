@@ -82,6 +82,9 @@ internal static unsafe partial class NativeMethods
     [LibraryImport(Library, EntryPoint = "echoir_tape_create")]
     internal static partial nint TapeCreate(nint folder);
 
+    [LibraryImport(Library, EntryPoint = "echoir_tape_open")]
+    internal static partial nint TapeOpen(nint folder);
+
     [LibraryImport(Library, EntryPoint = "echoir_tape_add_track")]
     internal static partial int TapeAddTrack(nint tape, nint name, nint label);
 

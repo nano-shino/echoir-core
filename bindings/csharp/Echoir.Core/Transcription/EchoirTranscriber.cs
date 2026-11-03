@@ -330,11 +330,16 @@ public sealed class EchoirTranscriber : IDisposable, IAsyncDisposable
 
     // Starts a session on the loaded model. The mic and loopback sources open the device
     // (deviceId null: the default device, which follows the system default). The push source
-    // takes audio through Push. Events are raised on the context current here.
+    // takes audio through Push. Events are raised on the context current here. Throws
+    // ArgumentException when options.Tape is read-only (EchoirTape.Open).
     public void Start(AudioSource source, string? deviceId = null, TranscriberOptions? options = null)
     {
         ObjectDisposedException.ThrowIf(_disposed, this);
         options ??= new TranscriberOptions();
+        if (options.Tape is { IsReadOnly: true })
+        {
+            throw new ArgumentException("The tape is read-only (EchoirTape.Open); a run cannot write it.", nameof(options));
+        }
         SynchronizationContext? context = SynchronizationContext.Current;
 
         lock (_native)

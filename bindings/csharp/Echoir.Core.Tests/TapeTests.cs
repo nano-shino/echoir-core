@@ -258,6 +258,64 @@ public sealed class TapeTests
         await transcriber.StopAsync();
     }
 
+    [TestMethod]
+    public async Task ASavedTapeOpensReadOnly()
+    {
+        using var folder = new TempFolder();
+        short[] audio = Voice(4 * SampleRate, seed: 6);
+        short[] closedRead;
+        Peak[] closedPeaks;
+        await using (var tape = EchoirTape.Create(folder.Path))
+        {
+            await using var transcriber = await LoadAsync();
+            transcriber.Start(AudioSource.Push, options: new TranscriberOptions { Tape = tape });
+            transcriber.Push(audio, SampleRate, 1);
+            await transcriber.StopAsync();
+            await tape.CloseAsync();
+            Assert.IsTrue(tape.TryReadAudio("mic", 1000, 2000, out closedRead));
+            closedPeaks = tape.ReadPeaks("mic", 0, 4000, 100);
+        }
+        File.WriteAllText(System.IO.Path.Combine(folder.Path, "notes.txt"), "notes");
+        var before = Directory.GetFiles(folder.Path).Select(f => (f, new FileInfo(f).Length, File.GetLastWriteTimeUtc(f))).ToArray();
+
+        using (var saved = EchoirTape.Open(folder.Path))
+        {
+            Assert.IsTrue(saved.IsReadOnly);
+            Assert.IsTrue(saved.IsClosed);
+            Assert.AreEqual(folder.Path, saved.Folder);
+            Assert.AreEqual(4000L, saved.DurationMs);
+            TapeTrack mic = saved.Tracks.Single();
+            Assert.AreEqual("mic", mic.Name);
+            Assert.AreEqual("mic.opus", mic.File);
+            CollectionAssert.AreEqual(new[] { new TapeRun(0, 4000) }, mic.Runs.ToArray());
+
+            // The same file decodes to the same samples; the envelope is that of the decoded audio.
+            Assert.IsTrue(saved.TryReadAudio("mic", 1000, 2000, out short[] again));
+            CollectionAssert.AreEqual(closedRead, again);
+            Peak[] peaks = saved.ReadPeaks("mic", 0, 4000, 100);
+            Assert.AreEqual(closedPeaks.Length, peaks.Length);
+            for (int i = 0; i < peaks.Length; i++)
+            {
+                Assert.AreEqual(closedPeaks[i].Max, peaks[i].Max, 0.1, $"bucket {i}");
+            }
+            Assert.IsFalse(saved.TryReadAudio("mic", 4000, 5000, out _));
+
+            // Nothing writes it.
+            Assert.ThrowsException<InvalidOperationException>(() => saved.AddTrack("other"));
+            await using var transcriber = await LoadAsync();
+            Assert.ThrowsException<ArgumentException>(
+                () => transcriber.Start(AudioSource.Push, options: new TranscriberOptions { Tape = saved }));
+            await saved.CheckpointAsync();
+            await saved.CloseAsync();
+        }
+        var after = Directory.GetFiles(folder.Path).Select(f => (f, new FileInfo(f).Length, File.GetLastWriteTimeUtc(f))).ToArray();
+        CollectionAssert.AreEquivalent(before, after);
+
+        Assert.ThrowsException<DirectoryNotFoundException>(() => EchoirTape.Open(System.IO.Path.Combine(folder.Path, "missing")));
+        Assert.ThrowsException<ArgumentException>(() => EchoirTape.Open(""));
+        Assert.ThrowsException<ArgumentNullException>(() => EchoirTape.Open(null!));
+    }
+
     private static async Task<EchoirTranscriber> LoadAsync()
     {
         var transcriber = new EchoirTranscriber();

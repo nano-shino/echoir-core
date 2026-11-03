@@ -39,14 +39,18 @@ public sealed class EchoirTape : IDisposable, IAsyncDisposable
 
     private readonly TapeHandle _handle;
 
-    private EchoirTape(TapeHandle handle, string? folder)
+    private EchoirTape(TapeHandle handle, string? folder, bool readOnly)
     {
         _handle = handle;
         Folder = folder;
+        IsReadOnly = readOnly;
     }
 
     // The folder of the page files and the joined files; null for a tape kept in memory only.
     public string? Folder { get; }
+
+    // True for a tape from Open: it reads a folder and writes nothing.
+    public bool IsReadOnly { get; }
 
     // The newest audio of each track that stays in memory; older audio is in the folder, or gone.
     public static TimeSpan MemoryWindow { get; } = TimeSpan.FromMinutes(2);
@@ -62,7 +66,34 @@ public sealed class EchoirTape : IDisposable, IAsyncDisposable
         {
             throw EchoirException.FromLastError(EchoirStatus.Internal, "echoir_tape_create");
         }
-        return new EchoirTape(new TapeHandle(tape), normalized);
+        return new EchoirTape(new TapeHandle(tape), normalized, readOnly: false);
+    }
+
+    // Opens the files a tape left in folder as a read-only tape, such as a recording saved
+    // earlier. Each track is <track>.opus, or its page files <track>.00001.opus and on (left by a
+    // process that ended without CloseAsync), whichever holds more of the track; other files are
+    // not tracks. Every track is decoded once to build its level envelope, so call it off the UI
+    // thread (about a second per hour of audio). The tape writes nothing: AddTrack throws
+    // InvalidOperationException, Start throws ArgumentException when TranscriberOptions.Tape is
+    // this tape, and CheckpointAsync and CloseAsync do nothing. TryReadAudio, ReadPeaks, Tracks
+    // and DurationMs work; each track has one run, the whole track, and its label is its name.
+    // Throws ArgumentException for an empty folder (ArgumentNullException for null) and
+    // DirectoryNotFoundException when it does not exist; an EchoirException when a file of a
+    // track cannot be read.
+    public static EchoirTape Open(string folder)
+    {
+        ArgumentException.ThrowIfNullOrEmpty(folder);
+        if (!Directory.Exists(folder))
+        {
+            throw new DirectoryNotFoundException($"The tape folder {folder} does not exist.");
+        }
+        using var path = Utf8String.Create(folder);
+        nint tape = NativeMethods.TapeOpen(path.Pointer);
+        if (tape == 0)
+        {
+            throw EchoirException.FromLastFailure("echoir_tape_open");
+        }
+        return new EchoirTape(new TapeHandle(tape), folder, readOnly: true);
     }
 
     // The length of the tape, that of its longest track, in ms.
@@ -93,7 +124,8 @@ public sealed class EchoirTape : IDisposable, IAsyncDisposable
 
     // Adds a track. A transcriber also adds the track it writes when it is missing, labelled with
     // its name. Throws ArgumentException for a name that is empty, longer than 64 bytes of UTF-8,
-    // or equal to another track's name ignoring case; InvalidOperationException after CloseAsync.
+    // or equal to another track's name ignoring case; InvalidOperationException after CloseAsync
+    // and on a tape from Open.
     public void AddTrack(string name, string? label = null)
     {
         ArgumentException.ThrowIfNullOrEmpty(name);
