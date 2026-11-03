@@ -236,6 +236,23 @@ when recording stops, and `tape.CloseAsync()` writes it for the last time.
 `TranscribeSamplesAsync` decodes a range of samples on the loaded model apart from the live
 transcript, for example to decode a stretch again with another model after a run.
 
+To transcribe several sources at once, such as the microphone and the system audio, load the model
+once as an `EchoirEngine` and make one transcriber per source on it. Each transcriber has its own
+transcript, events and tape track; their decodes take turns on the model, so each adds to the
+others' lag (`Lag`, and `WaitMs` in `TranscriberStats`). Start them all before audio flows and
+their tape tracks start at the same time.
+
+```csharp
+using EchoirEngine engine = await EchoirEngine.LoadAsync(modelId, modelsDir);
+await using var mic = new EchoirTranscriber(engine);
+await using var system = new EchoirTranscriber(engine);
+mic.Start(AudioSource.Mic);
+system.Start(AudioSource.Loopback);
+```
+
+Disposing a transcriber leaves the engine loaded; disposing the engine frees the model once no
+session of its transcribers is left. `LoadAsync` on a transcriber made this way throws.
+
 ## C API
 
 `include/echoir/echoir.h` is the public C ABI. [docs/c-api.md](docs/c-api.md) is the reference for
