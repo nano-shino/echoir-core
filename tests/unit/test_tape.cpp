@@ -860,9 +860,11 @@ namespace {
 std::vector<std::string> listing(const std::filesystem::path& folder) {
     std::vector<std::string> out;
     for (const auto& e : std::filesystem::directory_iterator(folder)) {
-        const std::uintmax_t size = e.is_regular_file() ? e.file_size() : 0;
+        // As long long: the file clock's count is wider than 64 bits on some standard libraries.
+        const auto size = static_cast<long long>(e.is_regular_file() ? e.file_size() : 0);
+        const auto time = static_cast<long long>(e.last_write_time().time_since_epoch().count());
         out.push_back(e.path().filename().string() + " " + std::to_string(size) + " " +
-                      std::to_string(e.last_write_time().time_since_epoch().count()));
+                      std::to_string(time));
     }
     std::sort(out.begin(), out.end());
     return out;
