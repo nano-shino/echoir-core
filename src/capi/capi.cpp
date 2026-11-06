@@ -179,12 +179,38 @@ void echoir_model_params_init(echoir_model_params* p) {
 #ifdef ECHOIR_HAS_ENGINE
 namespace {
 
+// The longest vad_min_silence_ms. A pause longer than a minute is not a pause in speech.
+constexpr int32_t kMaxVadMinSilenceMs = 60000;
+
+// The VAD tuning of the engine params, checked. 0 keeps the VAD's own value.
+echoir::vad::VadOverrides vad_tuning(float threshold, int32_t min_silence_ms) {
+    // Written so that NaN fails too.
+    if (!(threshold >= 0.0F && threshold <= 1.0F)) {
+        throw std::invalid_argument("vad_threshold must be from 0 to 1");
+    }
+    if (min_silence_ms < 0 || min_silence_ms > kMaxVadMinSilenceMs) {
+        throw std::invalid_argument("vad_min_silence_ms must be from 0 to 60000");
+    }
+    echoir::vad::VadOverrides overrides;
+    overrides.threshold = threshold;
+    overrides.min_silence_ms = min_silence_ms;
+    return overrides;
+}
+
 // Loads the models that params names. Throws on failure, and the callers map the exception.
 std::unique_ptr<echoir_engine> make_engine(const echoir_engine_params& params) {
-    // A larger struct comes from a newer header. This version reads only the fields it knows.
-    if (params.struct_size < sizeof(echoir_engine_params)) {
-        throw std::invalid_argument("struct_size is smaller than echoir_engine_params");
+    constexpr size_t kEndOfThreads =
+        offsetof(echoir_engine_params, n_threads) + sizeof(echoir_engine_params::n_threads);
+    constexpr size_t kEndOfVadMinSilence = offsetof(echoir_engine_params, vad_min_silence_ms) +
+                                           sizeof(echoir_engine_params::vad_min_silence_ms);
+    // A larger struct comes from a newer header. This version reads only the fields it knows, and
+    // the VAD tuning only when the struct includes it.
+    if (params.struct_size < kEndOfThreads) {
+        throw std::invalid_argument("struct_size is smaller than the fields up to n_threads");
     }
+    const bool has_tuning = params.struct_size >= kEndOfVadMinSilence;
+    const echoir::vad::VadOverrides overrides = vad_tuning(
+        has_tuning ? params.vad_threshold : 0.0F, has_tuning ? params.vad_min_silence_ms : 0);
 #ifndef ECHOIR_FAKE_BACKEND
     // The VAD is always needed, so a missing path fails before any model loads.
     if (params.vad_model_path == nullptr || params.vad_model_path[0] == '\0') {
@@ -197,7 +223,7 @@ std::unique_ptr<echoir_engine> make_engine(const echoir_engine_params& params) {
                                                ? echoir::text::path_from_utf8(params.vad_model_path)
                                                : std::filesystem::path();
     std::unique_ptr<echoir::vad::IVad> vad =
-        echoir::vad::make_vad(vad_path, 2, {}, echoir::vad::VadUse::streaming);
+        echoir::vad::make_vad(vad_path, 2, overrides, echoir::vad::VadUse::streaming);
     return std::unique_ptr<echoir_engine>(new echoir_engine{std::move(backend), std::move(vad)});
 }
 
@@ -212,6 +238,8 @@ std::unique_ptr<echoir_engine> make_engine_from_model(const echoir_model_params&
         offsetof(echoir_model_params, use_gpu) + sizeof(echoir_model_params::use_gpu);
     constexpr size_t kEndOfThreads =
         offsetof(echoir_model_params, n_threads) + sizeof(echoir_model_params::n_threads);
+    constexpr size_t kEndOfVadMinSilence = offsetof(echoir_model_params, vad_min_silence_ms) +
+                                           sizeof(echoir_model_params::vad_min_silence_ms);
     if (params.struct_size < kEndOfModelId) {
         throw std::invalid_argument("struct_size is smaller than the fields up to model_id");
     }
@@ -221,6 +249,10 @@ std::unique_ptr<echoir_engine> make_engine_from_model(const echoir_model_params&
     if (params.model_id == nullptr || params.model_id[0] == '\0') {
         throw std::invalid_argument("model_id is required");
     }
+    const bool has_tuning = params.struct_size >= kEndOfVadMinSilence;
+    // Checked here too, so a bad value is reported before a missing file.
+    (void)vad_tuning(has_tuning ? params.vad_threshold : 0.0F,
+                     has_tuning ? params.vad_min_silence_ms : 0);
 #ifndef ECHOIR_FAKE_BACKEND
     if (params.models_dir == nullptr || params.models_dir[0] == '\0') {
         throw std::invalid_argument("models_dir is required");
@@ -266,6 +298,10 @@ std::unique_ptr<echoir_engine> make_engine_from_model(const echoir_model_params&
     engine.vad_model_path = vad_path.c_str();
     engine.use_gpu = params.struct_size >= kEndOfUseGpu ? params.use_gpu : 1;
     engine.n_threads = params.struct_size >= kEndOfThreads ? params.n_threads : 0;
+    if (has_tuning) {
+        engine.vad_threshold = params.vad_threshold;
+        engine.vad_min_silence_ms = params.vad_min_silence_ms;
+    }
     return make_engine(engine);
 }
 

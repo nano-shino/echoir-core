@@ -45,6 +45,16 @@ stream::VadPostprocessParams with_overrides(stream::VadPostprocessParams params,
                 "min_silence_frame, merge_silence_frame or extend_speech_frame)");
         }
     }
+    if (overrides.threshold > 0.0) {
+        params.prob_threshold = overrides.threshold;
+    }
+    if (overrides.min_silence_ms > 0) {
+        // A pause ends speech when it is longer than both the dip bridged inside speech and the
+        // gap merged between ranges, so the gap takes the length and the bridge is kept within it.
+        const int frames = (overrides.min_silence_ms + 9) / 10;
+        params.merge_silence_frame = frames;
+        params.min_silence_frame = std::min(params.min_silence_frame, frames);
+    }
     return params;
 }
 

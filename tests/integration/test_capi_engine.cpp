@@ -2,6 +2,7 @@
 // echoir library (tests/CMakeLists.txt). The core objects are not linked next to it, so the
 // backend logging state exists once in the process. It uses only the public header, as a host
 // would. Cases that need a model skip when the model is missing.
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
 #include <string>
@@ -34,11 +35,58 @@ TEST_CASE("engine create rejects NULL params") {
     CHECK(last_error_contains("echoir_engine_create: params must not be NULL"));
 }
 
-TEST_CASE("engine create rejects a struct_size smaller than the published struct") {
+TEST_CASE("engine create rejects a struct_size that stops before n_threads") {
     echoir_engine_params params = engine_params("no-such-model.bin", "no-such-vad.bin");
-    params.struct_size = sizeof(echoir_engine_params) - 1;
+    params.struct_size = static_cast<uint32_t>(offsetof(echoir_engine_params, n_threads));
     CHECK(echoir_engine_create(&params) == nullptr);
     CHECK(last_error_contains("struct_size"));
+}
+
+TEST_CASE("engine create takes a struct from before the VAD tuning and does not read it") {
+    echoir_engine_params params = engine_params("no-such-model.bin", "no-such-vad.bin");
+    params.struct_size = static_cast<uint32_t>(offsetof(echoir_engine_params, vad_threshold));
+    // Beyond struct_size, so a bad value there is not seen.
+    params.vad_threshold = -1.0F;
+    params.vad_min_silence_ms = -1;
+    echoir_engine* engine = echoir_engine_create(&params);
+    if (engine != nullptr) {
+        echoir_engine_free(engine);  // the fake build loads no files
+    } else {
+        CHECK_FALSE(last_error_contains("struct_size"));
+        CHECK_FALSE(last_error_contains("vad_"));
+    }
+}
+
+TEST_CASE("engine create refuses VAD tuning out of range before loading anything") {
+    struct Case {
+        float threshold;
+        int32_t min_silence_ms;
+        const char* field;
+    };
+    const Case cases[] = {
+        {-0.1F, 0, "vad_threshold"},         {1.5F, 0, "vad_threshold"},
+        {std::nanf(""), 0, "vad_threshold"}, {0.0F, -1, "vad_min_silence_ms"},
+        {0.0F, 60001, "vad_min_silence_ms"},
+    };
+    for (const Case& c : cases) {
+        INFO(c.field << " " << c.threshold << " " << c.min_silence_ms);
+        echoir_engine_params params = engine_params("no-such-model.bin", "no-such-vad.bin");
+        params.vad_threshold = c.threshold;
+        params.vad_min_silence_ms = c.min_silence_ms;
+        CHECK(echoir_engine_create(&params) == nullptr);
+        CHECK(echoir_last_status() == ECHOIR_ERR_INVALID_ARG);
+        CHECK(last_error_contains(c.field));
+
+        echoir_model_params p{};
+        echoir_model_params_init(&p);
+        p.model_id = "whisper-tiny-en";
+        p.models_dir = "no-such-models-dir";
+        p.vad_threshold = c.threshold;
+        p.vad_min_silence_ms = c.min_silence_ms;
+        CHECK(echoir_engine_create_from_model(&p) == nullptr);
+        CHECK(echoir_last_status() == ECHOIR_ERR_INVALID_ARG);
+        CHECK(last_error_contains(c.field));
+    }
 }
 
 // The fake build loads no files, so the cases that check missing or unset model paths are left out.
@@ -163,6 +211,8 @@ TEST_CASE("model params init sets struct_size and defaults") {
     CHECK(p.vad_id == nullptr);
     CHECK(p.use_gpu == 1);
     CHECK(p.n_threads == 0);
+    CHECK(p.vad_threshold == 0.0F);
+    CHECK(p.vad_min_silence_ms == 0);
 }
 
 TEST_CASE("model params init with NULL does not crash and records an error") {
@@ -235,6 +285,14 @@ TEST_CASE("engine create from model loads whisper-tiny-en from the models direct
     p.models_dir = dir.c_str();
     p.use_gpu = 0;
     echoir_engine* engine = echoir_engine_create_from_model(&p);
+    REQUIRE(engine != nullptr);
+    echoir_engine_free(engine);
+
+    // With VAD tuning and a thread count.
+    p.n_threads = 2;
+    p.vad_threshold = 0.5F;
+    p.vad_min_silence_ms = 300;
+    engine = echoir_engine_create_from_model(&p);
     REQUIRE(engine != nullptr);
     echoir_engine_free(engine);
 }

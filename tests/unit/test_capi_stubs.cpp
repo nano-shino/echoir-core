@@ -30,6 +30,8 @@ TEST_CASE("engine params init sets struct_size and defaults") {
     CHECK(p.vad_model_path == nullptr);
     CHECK(p.use_gpu == 1);
     CHECK(p.n_threads == 0);
+    CHECK(p.vad_threshold == 0.0F);
+    CHECK(p.vad_min_silence_ms == 0);
 }
 
 TEST_CASE("session params init sets struct_size and defaults") {
