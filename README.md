@@ -256,6 +256,15 @@ system.Start(AudioSource.Loopback);
 Disposing a transcriber leaves the engine loaded; disposing the engine frees the model once no
 session of its transcribers is left. `LoadAsync` on a transcriber made this way throws.
 
+`EngineLoadOptions` picks the VAD, GPU or CPU and the decoder's CPU threads, and tunes the VAD:
+`VadThreshold` (higher hears less as speech) and `VadMinSilenceMs` (the pause that ends a line).
+Zero keeps the VAD's own values. Every transcriber on the engine shares them.
+
+```csharp
+var options = new EngineLoadOptions { VadId = "firered-vad-v1", VadMinSilenceMs = 800 };
+using EchoirEngine engine = await EchoirEngine.LoadAsync(modelId, modelsDir, options);
+```
+
 ## C API
 
 `include/echoir/echoir.h` is the public C ABI. [docs/c-api.md](docs/c-api.md) is the reference for

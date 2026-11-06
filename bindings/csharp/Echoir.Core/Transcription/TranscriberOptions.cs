@@ -58,6 +58,41 @@ public sealed record TranscriberOptions
     public string? TapeTrack { get; init; }
 }
 
+// How a model and its VAD are loaded (echoir.h, echoir_model_params). The defaults match
+// echoir_model_params_init. The VAD belongs to the engine, so every transcriber on it shares these.
+public sealed record EngineLoadOptions
+{
+    // Registry id of the VAD. Null or empty: the default VAD of the model's backend.
+    public string? VadId { get; init; }
+
+    // The GPU backend built into the library, or the CPU when false. No effect where the library
+    // has no GPU backend.
+    public bool UseGpu { get; init; } = true;
+
+    // CPU threads of the speech model. Zero: the library's default (4).
+    public int Threads { get; init; }
+
+    // Speech probability the VAD needs for speech, above 0 and at most 1; higher hears less as
+    // speech. Zero: the VAD's own value (Silero 0.2, FireRedVAD 0.4).
+    public float VadThreshold { get; init; }
+
+    // Shortest pause that ends a speech range, in ms, up to 60000; lower ends lines sooner.
+    // Zero: the VAD's own value (Silero 1500, FireRedVAD 500).
+    public int VadMinSilenceMs { get; init; }
+
+    // Throws ArgumentOutOfRangeException for a value the library would refuse.
+    internal void Validate()
+    {
+        ArgumentOutOfRangeException.ThrowIfNegative(Threads, nameof(Threads));
+        if (!(VadThreshold >= 0f && VadThreshold <= 1f))
+        {
+            throw new ArgumentOutOfRangeException(nameof(VadThreshold), VadThreshold, "Must be from 0 to 1.");
+        }
+        ArgumentOutOfRangeException.ThrowIfNegative(VadMinSilenceMs, nameof(VadMinSilenceMs));
+        ArgumentOutOfRangeException.ThrowIfGreaterThan(VadMinSilenceMs, 60000, nameof(VadMinSilenceMs));
+    }
+}
+
 // The state of a capture (echoir.h, echoir_capture_state).
 public enum CaptureState
 {

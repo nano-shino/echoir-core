@@ -65,6 +65,12 @@ SileroSettings settings_from(const VadOverrides& overrides) {
                                         " (use threshold, min_silence_ms or speech_pad_ms)");
         }
     }
+    if (overrides.threshold > 0.0) {
+        s.threshold = static_cast<float>(overrides.threshold);
+    }
+    if (overrides.min_silence_ms > 0) {
+        s.min_silence_ms = overrides.min_silence_ms;
+    }
     return s;
 }
 

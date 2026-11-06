@@ -529,6 +529,36 @@ TEST_CASE("silero VAD threshold override gives less speech, through make_vad too
     CHECK(total_ms(via_factory->detect(pcm)) == total_ms(strict));
 }
 
+TEST_CASE("silero VAD numeric tuning matches the same keys, and 0 keeps the defaults") {
+    const auto model = et::model_file("silero-v6.2.0", "vad");
+    ECHOIR_REQUIRE_OR_SKIP(model, "silero-v6.2.0 (vad) model");
+    const auto wav = et::fixture("jfk");
+    ECHOIR_REQUIRE_OR_SKIP(wav, "jfk.wav fixture");
+    const std::vector<float> pcm = load_16k_mono(*wav);
+
+    ev::VadOverrides by_key;
+    by_key.add("threshold=0.5");
+    by_key.add("min_silence_ms=250");
+    ev::VadOverrides by_number;
+    by_number.threshold = 0.5;
+    by_number.min_silence_ms = 250;
+    const std::vector<ev::Range> keyed = ev::SileroVad(*model, 2, by_key).detect(pcm);
+    const std::unique_ptr<ev::IVad> numbered = ev::make_vad(*model, 2, by_number);
+    const std::vector<ev::Range> tuned = numbered->detect(pcm);
+    REQUIRE(tuned.size() == keyed.size());
+    CHECK(total_ms(tuned) == total_ms(keyed));
+
+    // The numbers win over the keys, and zeros change nothing.
+    ev::VadOverrides both = by_number;
+    both.add("min_silence_ms=2000");
+    CHECK(ev::SileroVad(*model, 2, both).detect(pcm).size() == keyed.size());
+    ev::VadOverrides zeros;
+    const std::vector<ev::Range> base = ev::SileroVad(*model).detect(pcm);
+    const std::vector<ev::Range> zeroed = ev::SileroVad(*model, 2, zeros).detect(pcm);
+    REQUIRE(zeroed.size() == base.size());
+    CHECK(total_ms(zeroed) == total_ms(base));
+}
+
 TEST_CASE("silero VAD speech_pad_ms override changes the length of its ranges") {
     const auto model = et::model_file("silero-v6.2.0", "vad");
     ECHOIR_REQUIRE_OR_SKIP(model, "silero-v6.2.0 (vad) model");

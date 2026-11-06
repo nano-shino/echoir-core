@@ -33,17 +33,28 @@ public sealed class EchoirEngine : IDisposable
     // Loads a model and its VAD (vadId null: the model's default VAD) from modelsDir, on a thread
     // pool thread. Model files that are missing or have the wrong size fail with an
     // EchoirException.
-    public static async Task<EchoirEngine> LoadAsync(
+    public static Task<EchoirEngine> LoadAsync(
         string modelId,
         string modelsDir,
         string? vadId = null,
         bool useGpu = true,
+        CancellationToken cancellationToken = default) =>
+        LoadAsync(modelId, modelsDir, new EngineLoadOptions { VadId = vadId, UseGpu = useGpu }, cancellationToken);
+
+    // Loads a model with the given VAD, compute and VAD tuning. Values out of range throw
+    // ArgumentOutOfRangeException before anything loads.
+    public static async Task<EchoirEngine> LoadAsync(
+        string modelId,
+        string modelsDir,
+        EngineLoadOptions options,
         CancellationToken cancellationToken = default)
     {
         ArgumentException.ThrowIfNullOrEmpty(modelId);
         ArgumentException.ThrowIfNullOrEmpty(modelsDir);
+        ArgumentNullException.ThrowIfNull(options);
+        options.Validate();
         EngineHandle handle = await Task.Run(
-            () => EchoirTranscriber.CreateEngine(modelId, modelsDir, vadId, useGpu), cancellationToken);
+            () => EchoirTranscriber.CreateEngine(modelId, modelsDir, options), cancellationToken);
         if (cancellationToken.IsCancellationRequested)
         {
             handle.Dispose();

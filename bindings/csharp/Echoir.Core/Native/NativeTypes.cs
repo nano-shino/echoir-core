@@ -29,6 +29,8 @@ internal struct ModelParams
     public nint VadId;
     public int UseGpu;
     public int NThreads;
+    public float VadThreshold;
+    public int VadMinSilenceMs;
 }
 
 [StructLayout(LayoutKind.Sequential)]

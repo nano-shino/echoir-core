@@ -107,6 +107,44 @@ public sealed partial class SharedEngineTests
         Assert.IsTrue(transcriber.IsLoaded);
     }
 
+    [TestMethod]
+    public async Task LoadAsyncTakesVadTuningThreadsAndCompute()
+    {
+        var options = new EngineLoadOptions
+        {
+            VadId = "silero-v6.2.0",
+            UseGpu = false,
+            Threads = 2,
+            VadThreshold = 0.5f,
+            VadMinSilenceMs = 300,
+        };
+        using EchoirEngine engine = await EchoirEngine.LoadAsync("whisper-tiny-en", TestPaths.ModelsDir, options);
+        await using var transcriber = new EchoirTranscriber(engine);
+        transcriber.Start(AudioSource.Push);
+        PushTenths(transcriber, 10);
+        await transcriber.StopAsync();
+        AssertBlocks(10, transcriber);
+    }
+
+    [TestMethod]
+    public async Task LoadAsyncRefusesTuningOutOfRange()
+    {
+        EngineLoadOptions[] bad =
+        {
+            new() { VadThreshold = -0.1f },
+            new() { VadThreshold = 1.5f },
+            new() { VadThreshold = float.NaN },
+            new() { VadMinSilenceMs = -1 },
+            new() { VadMinSilenceMs = 60001 },
+            new() { Threads = -1 },
+        };
+        foreach (EngineLoadOptions options in bad)
+        {
+            await Assert.ThrowsExceptionAsync<ArgumentOutOfRangeException>(
+                () => EchoirEngine.LoadAsync("whisper-tiny-en", TestPaths.ModelsDir, options), options.ToString());
+        }
+    }
+
     private static Task<EchoirEngine> LoadEngineAsync() =>
         EchoirEngine.LoadAsync("whisper-tiny-en", TestPaths.ModelsDir);
 

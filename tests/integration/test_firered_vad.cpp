@@ -392,6 +392,38 @@ TEST_CASE("firered VAD threshold is a short name for prob_threshold") {
     CHECK_THROWS_AS(ev::FireRedVad(*model, 2, both), std::invalid_argument);
 }
 
+TEST_CASE("firered VAD numeric tuning sets the threshold and the pause that ends speech") {
+    for_each_variant([&](const Variant& v) {
+        const auto model = et::model_file(v.id, "vad");
+        ECHOIR_REQUIRE_OR_SKIP(model, std::string(v.id) + " (vad) model");
+        const es::VadPostprocessParams defaults = ev::FireRedVad::default_params(v.stream);
+
+        ev::VadOverrides tuning;
+        tuning.threshold = 0.7;
+        tuning.min_silence_ms = 1205;  // rounded up to whole 10 ms frames
+        ev::FireRedVad vad(*model, 2, tuning);
+        CHECK(vad.params().prob_threshold == doctest::Approx(0.7));
+        CHECK(vad.params().merge_silence_frame == 121);
+        CHECK(vad.params().min_silence_frame == defaults.min_silence_frame);
+        CHECK(vad.params().min_speech_frame == defaults.min_speech_frame);
+
+        // A pause shorter than the in-speech bridge shortens the bridge too.
+        ev::VadOverrides short_pause;
+        short_pause.min_silence_ms = 100;
+        ev::FireRedVad brief(*model, 2, short_pause);
+        CHECK(brief.params().merge_silence_frame == 10);
+        CHECK(brief.params().min_silence_frame == 10);
+
+        // The numbers win over the keys, and zeros keep the defaults.
+        ev::VadOverrides keyed = tuning;
+        keyed.add("threshold=0.2");
+        CHECK(ev::FireRedVad(*model, 2, keyed).params().prob_threshold == doctest::Approx(0.7));
+        ev::FireRedVad zeroed(*model, 2, ev::VadOverrides{});
+        CHECK(zeroed.params().prob_threshold == defaults.prob_threshold);
+        CHECK(zeroed.params().merge_silence_frame == defaults.merge_silence_frame);
+    });
+}
+
 TEST_CASE("firered VAD rejects a Silero key, an unknown key and a bad value") {
     const auto model = et::model_file("firered-vad-v1", "vad");
     ECHOIR_REQUIRE_OR_SKIP(model, "firered-vad-v1 (vad) model");

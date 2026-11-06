@@ -305,7 +305,8 @@ public sealed class EchoirTranscriber : IDisposable, IAsyncDisposable
             }
 
             EngineHandle engine = await Task.Run(
-                () => CreateEngine(modelId, modelsDir, vadId, useGpu), cancellationToken);
+                () => CreateEngine(modelId, modelsDir, new EngineLoadOptions { VadId = vadId, UseGpu = useGpu }),
+                cancellationToken);
             bool keep;
             lock (_native)
             {
@@ -943,18 +944,21 @@ public sealed class EchoirTranscriber : IDisposable, IAsyncDisposable
         return Marshal.PtrToStringUTF8(pointer) ?? string.Empty;
     }
 
-    internal static unsafe EngineHandle CreateEngine(string modelId, string modelsDir, string? vadId, bool useGpu)
+    internal static unsafe EngineHandle CreateEngine(string modelId, string modelsDir, EngineLoadOptions options)
     {
         using var model = Utf8String.Create(modelId);
         using var dir = Utf8String.Create(modelsDir);
-        using var vad = Utf8String.Create(vadId);
+        using var vad = Utf8String.Create(string.IsNullOrEmpty(options.VadId) ? null : options.VadId);
 
         ModelParams parameters = default;
         NativeMethods.ModelParamsInit(&parameters);
         parameters.ModelId = model.Pointer;
         parameters.ModelsDir = dir.Pointer;
         parameters.VadId = vad.Pointer;
-        parameters.UseGpu = useGpu ? 1 : 0;
+        parameters.UseGpu = options.UseGpu ? 1 : 0;
+        parameters.NThreads = options.Threads;
+        parameters.VadThreshold = options.VadThreshold;
+        parameters.VadMinSilenceMs = options.VadMinSilenceMs;
 
         nint engine = NativeMethods.EngineCreateFromModel(&parameters);
         if (engine == 0)

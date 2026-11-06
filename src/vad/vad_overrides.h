@@ -14,6 +14,13 @@ struct VadOverrides {
 
     // Keys in sorted order, so an error names the same key every time.
     std::map<std::string, std::string> values;
+
+    // Settings that every VAD has, given as numbers by the C API. Each is applied after the keys,
+    // in the VAD's own units, and 0 leaves the value from the keys or the default.
+    // threshold: the speech probability needed for speech, above 0 and at most 1.
+    double threshold = 0.0;
+    // min_silence_ms: the shortest pause that ends a speech range, in ms, 0 or more.
+    int min_silence_ms = 0;
 };
 
 // The value of a setting as a finite real number in decimal, such as 0.25 or 1e-3. Throws

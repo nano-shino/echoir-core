@@ -65,14 +65,24 @@ typedef enum { ECHOIR_BACKEND_WHISPER = 1, ECHOIR_BACKEND_QWEN3_ASR = 2 } echoir
 // Model configuration for echoir_engine_create(). Start from echoir_engine_params_init() and
 // change the fields you need. Paths are UTF-8 on every platform, and are read during the create
 // call only.
+//
+// vad_threshold and vad_min_silence_ms tune the VAD; 0 keeps its own value (Silero: 0.2 and
+// 1500 ms; FireRedVAD: 0.4 and 500 ms). vad_threshold is the speech probability needed for
+// speech, above 0 and at most 1: higher hears less as speech. vad_min_silence_ms is the shortest
+// pause that ends a speech range, from 0 to 60000: lower ends lines sooner. Other values make the
+// create call fail with ECHOIR_ERR_INVALID_ARG.
 typedef struct {
-  uint32_t       struct_size;          // sizeof(echoir_engine_params); lets the struct grow
+  uint32_t       struct_size;          // sizeof(echoir_engine_params). A smaller value is accepted
+                                       // if it covers every field up to n_threads; the fields
+                                       // after it take their defaults.
   echoir_backend backend;
   const char*    model_path;           // whisper .bin | qwen text .gguf
   const char*    mmproj_path;          // qwen only, else NULL
   const char*    vad_model_path;       // Silero ggml .bin or FireRedVAD .gguf (required)
   int32_t        use_gpu;              // 1 = GPU backend built into the library, 0 = CPU
-  int32_t        n_threads;            // CPU threads; 0 = default (4)
+  int32_t        n_threads;            // CPU threads of the speech model; 0 = default (4)
+  float          vad_threshold;        // 0 = the VAD's own value (default)
+  int32_t        vad_min_silence_ms;   // 0 = the VAD's own value (default)
 } echoir_engine_params;
 
 // How the text of the ongoing segment (its PARTIAL events) is stabilized, for
@@ -168,8 +178,8 @@ ECHOIR_API const char*    echoir_last_error(void);
 // Read it right after the failing call, on the same thread.
 ECHOIR_API echoir_status  echoir_last_status(void);
 
-// Sets *p to the defaults (Whisper backend, use_gpu 1, n_threads 0, all paths NULL) and sets
-// struct_size. With p NULL, nothing is written and the last error is set.
+// Sets *p to the defaults (Whisper backend, use_gpu 1, n_threads and the VAD tuning 0, all paths
+// NULL) and sets struct_size. With p NULL, nothing is written and the last error is set.
 ECHOIR_API void           echoir_engine_params_init(echoir_engine_params*);
 
 // Sets *p to the defaults (language "auto", min_chunk_ms 500, max_segment_ms 10000,
@@ -507,10 +517,12 @@ typedef struct {
                                        // model's backend
   int32_t     use_gpu;                 // 1 = GPU backend built into the library, 0 = CPU
   int32_t     n_threads;               // CPU threads; 0 = default
+  float       vad_threshold;           // as in echoir_engine_params; 0 = the VAD's own value
+  int32_t     vad_min_silence_ms;      // as in echoir_engine_params; 0 = the VAD's own value
 } echoir_model_params;
 
 // Sets *p to the defaults (registry_json, models_dir, model_id and vad_id NULL; use_gpu 1;
-// n_threads 0) and sets struct_size. With p NULL, nothing is written and the last error is set.
+// n_threads, vad_threshold and vad_min_silence_ms 0) and sets struct_size. With p NULL, nothing is written and the last error is set.
 ECHOIR_API void           echoir_model_params_init(echoir_model_params*);
 
 // Resolves model_id and its VAD (and, for Qwen3-ASR, its projector) in the catalogue, checks that

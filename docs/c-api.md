@@ -120,7 +120,9 @@ the size of the struct that the header declares. The host can change the fields 
 The rules for an unexpected size depend on the struct:
 
 - **`echoir_engine_params`:** a larger size is accepted, and the library reads only the fields it
-  knows. A smaller size is refused, and `echoir_engine_create()` returns NULL.
+  knows. A smaller size is accepted if it covers every field up to `n_threads`; the VAD tuning after
+  it takes its defaults. A size that stops before `n_threads` is refused, and
+  `echoir_engine_create()` returns NULL.
 - **`echoir_session_params`:** a smaller size is accepted if it covers every field up to
   `emit_partials`. The fields after it take their defaults. A larger size is refused. `tape` is read
   only when the size also covers `tape_track`.
@@ -271,10 +273,12 @@ void echoir_model_params_init(echoir_model_params* p);
 Each sets `*p` to its defaults and sets `struct_size`. With `p` NULL, nothing is written and the last
 error is set. The defaults are:
 
-- Engine: Whisper backend, `use_gpu` 1, `n_threads` 0, all paths NULL.
+- Engine: Whisper backend, `use_gpu` 1, `n_threads` 0, `vad_threshold` 0, `vad_min_silence_ms` 0,
+  all paths NULL.
 - Session: `language` `"auto"`, `min_chunk_ms` 500, `max_segment_ms` 10000, `emit_partials` 1,
   `stream_policy` `ECHOIR_POLICY_DEFAULT`, `retain_audio_ms` 0, `tape` and `tape_track` NULL.
-- Model: `registry_json`, `models_dir`, `model_id` and `vad_id` NULL, `use_gpu` 1, `n_threads` 0.
+- Model: `registry_json`, `models_dir`, `model_id` and `vad_id` NULL, `use_gpu` 1, `n_threads` 0,
+  `vad_threshold` 0, `vad_min_silence_ms` 0.
 
 ### Engine
 
@@ -285,6 +289,17 @@ echoir_engine* echoir_engine_create(const echoir_engine_params* params);
 Loads the models named in `*params` and returns a new engine, or NULL on failure. `model_path` is the
 speech model, `mmproj_path` is the Qwen projector (Qwen only, otherwise NULL), and `vad_model_path` is
 required. The paths are read during this call only. Free the engine with `echoir_engine_free()`.
+
+Two fields tune the VAD. Each is 0 by default, which keeps the VAD's own value:
+
+| Field | Meaning | Silero | FireRedVAD |
+|---|---|---|---|
+| `vad_threshold` | Speech probability needed for speech, above 0 and at most 1. Higher hears less as speech. | 0.2 | 0.4 |
+| `vad_min_silence_ms` | Shortest pause that ends a speech range, 0 to 60000 ms. Lower ends lines sooner. | 1500 ms | 500 ms |
+
+FireRedVAD works in 10 ms frames, so the pause is rounded up to whole frames. A value out of range
+fails with `ECHOIR_ERR_INVALID_ARG` before any file is read. The engine's sessions all use the same
+VAD, so they share its tuning.
 
 ```c
 echoir_engine* echoir_engine_create_from_model(const echoir_model_params* params);
@@ -716,7 +731,7 @@ void echoir_model_params_init(echoir_model_params* p);
 Sets `*p` to its defaults and sets `struct_size`. With `p` NULL, nothing is written and the last error is
 set. Set `model_id` and `models_dir` before creating an engine with them. `registry_json` replaces the
 built-in catalogue. `vad_id` selects the VAD. NULL or an empty string selects the default VAD of the
-model's backend.
+model's backend. `vad_threshold` and `vad_min_silence_ms` tune it as in `echoir_engine_params`.
 
 ```c
 const char* echoir_models_json(const char* registry_json, const char* models_dir);
