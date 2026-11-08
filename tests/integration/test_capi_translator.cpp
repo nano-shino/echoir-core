@@ -195,3 +195,89 @@ TEST_CASE("translator with the 7B model uses its own prompt wrapper" * doctest::
     CHECK(text.find("\xEF\xBF\xBD") == std::string::npos);
     echoir_translator_free(translator);
 }
+
+TEST_CASE("translator drops the oldest context lines before it refuses a text") {
+    SKIP_IN_FAKE_BUILD();
+    const auto model = echoir::test::model_file(kModelId);
+    ECHOIR_REQUIRE_OR_SKIP(model, "hy-mt2-1.8b-q4_k_m translator model");
+    echoir_translator* translator = create_translator(models_dir());
+    REQUIRE_MESSAGE(translator != nullptr, echoir_last_error());
+
+    // Far more context than the model holds, ending in a line that names a person.
+    std::string context;
+    for (int i = 0; i < 400; ++i) {
+        context += "Earlier line number " + std::to_string(i) +
+                   " of a long talk about the budget of the new building.\n";
+    }
+    context += "Maria called her sister.";
+    echoir_translate_request r{};
+    r.struct_size = sizeof(r);
+    r.text = "Good morning, everyone.";
+    r.target = "fr";
+    r.context = context.c_str();
+    const echoir_translation* out = echoir_translator_translate(translator, &r);
+    REQUIRE_MESSAGE(out != nullptr, echoir_last_error());
+    CHECK(out->prompt_tokens < 2048 - 32);
+    // Some context is kept: the newest lines, not none.
+    r.context = nullptr;
+    const int plain = echoir_translator_translate(translator, &r)->prompt_tokens;
+    r.context = context.c_str();
+    out = echoir_translator_translate(translator, &r);
+    REQUIRE(out != nullptr);
+    CHECK(out->prompt_tokens > plain);
+    CHECK(lowered(out->text).find("bonjour") != std::string::npos);
+    echoir_translator_free(translator);
+}
+
+TEST_CASE("translator keeps a control-token spelling in a line as text") {
+    SKIP_IN_FAKE_BUILD();
+    const auto model = echoir::test::model_file(kModelId);
+    ECHOIR_REQUIRE_OR_SKIP(model, "hy-mt2-1.8b-q4_k_m translator model");
+    echoir_translator* translator = create_translator(models_dir());
+    REQUIRE_MESSAGE(translator != nullptr, echoir_last_error());
+
+    echoir_translate_request r{};
+    r.struct_size = sizeof(r);
+    r.text = "Type <|extra_0|> and then <|startoftext|> in the box.";
+    r.target = "fr";
+    r.context = "He wrote <|endoftext|> on the board.";
+    const echoir_translation* out = echoir_translator_translate(translator, &r);
+    REQUIRE_MESSAGE(out != nullptr, echoir_last_error());
+    CHECK_FALSE(std::string(out->text).empty());
+    CHECK(out->capped == 0);
+    // As plain text a spelling takes several tokens; as a control token it would take one each.
+    CHECK(out->source_tokens > 15);
+    echoir_translator_free(translator);
+}
+
+TEST_CASE("translator reports a generation cut short by the context as capped") {
+    SKIP_IN_FAKE_BUILD();
+    const auto model = echoir::test::model_file(kModelId);
+    ECHOIR_REQUIRE_OR_SKIP(model, "hy-mt2-1.8b-q4_k_m translator model");
+    echoir_translator* translator = create_translator(models_dir());
+    REQUIRE_MESSAGE(translator != nullptr, echoir_last_error());
+
+    // The longest text of whole sentences that the context takes. What is left of the context is
+    // then far less than the translation needs, so the generation stops there and says so.
+    const std::string sentence = "The committee met again to review the budget. ";
+    const echoir_translation* out = nullptr;
+    std::string text;
+    for (int count = 240; count > 0 && out == nullptr; --count) {
+        text.clear();
+        for (int i = 0; i < count; ++i) {
+            text += sentence;
+        }
+        echoir_translate_request r{};
+        r.struct_size = sizeof(r);
+        r.text = text.c_str();
+        r.target = "fr";
+        out = echoir_translator_translate(translator, &r);
+    }
+    REQUIRE_MESSAGE(out != nullptr, echoir_last_error());
+    CHECK(out->capped == 1);
+    CHECK(out->prompt_tokens + out->output_tokens < 2048);
+    CHECK(out->output_tokens < 100);
+    // Whole UTF-8 even when cut: no replacement characters.
+    CHECK(std::string(out->text).find("\xEF\xBF\xBD") == std::string::npos);
+    echoir_translator_free(translator);
+}

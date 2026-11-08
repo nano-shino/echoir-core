@@ -586,8 +586,9 @@ typedef struct {
                                        // enough. They are not translated.
 } echoir_translate_request;
 
-// The result of a translation. It belongs to the translator and is valid until the translator's
-// next translate call or until it is freed.
+// The result of a translation. It belongs to the library, one per calling thread, and is valid
+// until the next echoir_translator_translate call on the same thread, whichever translator that
+// call is on. It outlives echoir_translator_free().
 typedef struct {
   uint32_t    struct_size;             // sizeof(echoir_translation), set by the library
   const char* text;                    // the translation, whole UTF-8
@@ -613,11 +614,13 @@ ECHOIR_API echoir_translator* echoir_translator_create_from_model(const echoir_t
 
 // Translates one line. The call is synchronous and takes about 0.3 s for a typical line on a GPU.
 // Output is greedy and each call is independent of the one before. Calls on one translator are
-// thread-safe and run one at a time, in the order they get the translator; they never wait for an
-// engine. The result is shared by all callers, so use one thread per translator, or copy the
-// result before another call can run. Returns NULL on failure: ECHOIR_ERR_INVALID_ARG for a NULL
+// thread-safe and run one at a time; they never wait for an engine. The returned result and its
+// text are owned by the library, like the strings of the *_json calls: they are valid until the
+// next echoir_translator_translate call on this thread, so another thread's call never changes
+// them. Copy what you need to keep. Returns NULL on failure: ECHOIR_ERR_INVALID_ARG for a NULL
 // argument, a blank text, a language that is not supported or a text that does not fit the model's
-// context (about 1900 tokens with its context lines), ECHOIR_ERR_BACKEND when the model fails.
+// context (about 1900 tokens; context lines are dropped oldest first to make room, so only a text
+// that is too long alone is refused), ECHOIR_ERR_BACKEND when the model fails.
 ECHOIR_API const echoir_translation* echoir_translator_translate(echoir_translator*,
                                                                  const echoir_translate_request*);
 

@@ -120,14 +120,13 @@ struct echoir_engine {};
 #endif
 
 // A translator created by echoir_translator_create_from_model(). It owns its model and shares
-// nothing with an engine. Calls take the mutex, so they run one at a time.
+// nothing with an engine. Calls take the mutex, so they run one at a time. A result is copied
+// into per-thread storage before the mutex is released.
 struct echoir_translator {
 #ifdef ECHOIR_HAS_ENGINE
     std::unique_ptr<echoir::translate::ITranslator> model;
 #endif
     std::mutex mutex;
-    std::string text;  // the text of result, kept alive here
-    echoir_translation result{};
 };
 
 #ifdef ECHOIR_HAS_ENGINE
@@ -387,7 +386,6 @@ std::unique_ptr<echoir_translator> make_translator(const echoir_translator_param
 
     auto translator = std::make_unique<echoir_translator>();
     translator->model = echoir::make_translator(config);
-    translator->result.struct_size = sizeof(echoir_translation);
     return translator;
 }
 
@@ -438,18 +436,28 @@ const echoir_translation* echoir_translator_translate(echoir_translator* transla
             in.context = request->context;
         }
 
-        const std::lock_guard<std::mutex> lock(translator->mutex);
-        const echoir::translate::Result out = translator->model->translate(in);
-        translator->text = out.text;
-        echoir_translation& result = translator->result;
-        result.text = translator->text.c_str();
-        result.capped = out.capped ? 1 : 0;
-        result.source_tokens = out.source_tokens;
-        result.prompt_tokens = out.prompt_tokens;
-        result.output_tokens = out.output_tokens;
-        result.prefill_ms = out.prefill_ms;
-        result.decode_ms = out.decode_ms;
-        return &result;
+        echoir::translate::Result out;
+        {
+            const std::lock_guard<std::mutex> lock(translator->mutex);
+            out = translator->model->translate(in);
+        }
+        // The caller reads the result after the lock is gone, when another thread may already be
+        // in the next call, so the result lives in this thread's storage until its next call.
+        struct ThreadResult {
+            std::string text;
+            echoir_translation result{};
+        };
+        thread_local ThreadResult slot;
+        slot.text = std::move(out.text);
+        slot.result.struct_size = sizeof(echoir_translation);
+        slot.result.text = slot.text.c_str();
+        slot.result.capped = out.capped ? 1 : 0;
+        slot.result.source_tokens = out.source_tokens;
+        slot.result.prompt_tokens = out.prompt_tokens;
+        slot.result.output_tokens = out.output_tokens;
+        slot.result.prefill_ms = out.prefill_ms;
+        slot.result.decode_ms = out.decode_ms;
+        return &slot.result;
     } catch (...) {
         status_of_current_exception("echoir_translator_translate");
         return nullptr;

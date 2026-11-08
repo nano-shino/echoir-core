@@ -22,6 +22,49 @@ public sealed class FakeTranslatorTests
     }
 
     [TestMethod]
+    public async Task TwoThreadsOnOneTranslatorEachReadTheirOwnText()
+    {
+        using EchoirTranslator translator = await EchoirTranslator.LoadAsync(null, NoModelsDir);
+        int wrong = 0;
+        Thread[] threads = Enumerable.Range(0, 4).Select(i => new Thread(() =>
+        {
+            for (int n = 0; n < 100; n++)
+            {
+                string line = $"line {i} {n}";
+                if (translator.Translate(line, "fr").Text != "[fr] " + line)
+                {
+                    Interlocked.Increment(ref wrong);
+                }
+            }
+        })).ToArray();
+        foreach (Thread thread in threads)
+        {
+            thread.Start();
+        }
+        foreach (Thread thread in threads)
+        {
+            thread.Join();
+        }
+        Assert.AreEqual(0, wrong);
+    }
+
+    [TestMethod]
+    public async Task LoadsFromACatalogueGivenAsText()
+    {
+        string registry = """
+            {"version":1,"default_vad":{"whisper":"","qwen":""},"default_translator":"mine","models":[
+              {"id":"mine","backend":"translator","display":"Mine","prompt_style":"hy-mt2-1.8b",
+               "files":[{"role":"model","name":"mine.gguf","url":"https://example.invalid/mine.gguf","size":1000}]}
+            ]}
+            """;
+        EchoirModels models = new(registry);
+        string? defaultId = models.Catalogue().DefaultTranslator;
+        using EchoirTranslator translator = await EchoirTranslator.LoadAsync(null, NoModelsDir, registry);
+        Assert.AreEqual(defaultId, translator.ModelId);
+        Assert.AreEqual("[de] Hallo", translator.Translate("Hallo", "de").Text);
+    }
+
+    [TestMethod]
     public async Task RefusesAModelThatIsNotATranslator()
     {
         EchoirException ex = await Assert.ThrowsExceptionAsync<EchoirException>(

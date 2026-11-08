@@ -52,23 +52,27 @@ public sealed class TranslationSkippedEventArgs : EventArgs
 // Follows the FINAL segments of one or more transcripts and translates them through one translator.
 //
 // One translation is in flight at a time, for all followed transcripts. While it runs, the segments
-// that arrive wait in order; once a transcript has more than MaxWaiting of them, its oldest waiting
-// segment is dropped and stays untranslated (Skipped), so the translations show the present rather
-// than a backlog. A segment is translated with the two FINAL segments before it in its transcript
-// as context, source text only, so a late or dropped translation changes nothing for the others.
-// PARTIAL text is never translated.
+// that arrive wait in order; once more than MaxWaiting of them wait, across all followed
+// transcripts, the oldest waiting segment overall is dropped and stays untranslated (Skipped), so
+// the translations show the present rather than a backlog. A segment is translated with the two
+// FINAL segments before it in its own transcript as context, source text only, so a late or
+// dropped translation changes nothing for the others. PARTIAL text is never translated.
 //
 // A clear of a followed transcript, Reset, and a restart of its segment ids (a new session on the
 // same transcript) drop what waits for it, and the result of a translation that was already running
 // is dropped when it returns. Translated and Skipped are raised on the SynchronizationContext that
 // was current when the transcript was followed, in the order the segments were translated; with no
-// context, on the worker's thread. Handlers must not throw.
+// context, on the worker's thread, where an exception from a handler is reported to
+// System.Diagnostics.Trace and the worker goes on. With a context, an exception reaches the
+// context, as with any posted call.
 //
 // Follow, Unfollow, Reset and Submit are called on the transcript's context, like any read of its
-// Finals. The translator is not owned: dispose it separately, after this.
+// Finals. The translator is not owned: dispose it separately, after this. Dispose does not wait for
+// a translation that is running: a call into a translator supplied by the host may still be in
+// progress after Dispose returns, and its result is dropped.
 public sealed class TranscriptTranslator : IDisposable
 {
-    // Segments of one transcript that may wait behind the one being translated.
+    // Segments, across all followed transcripts, that may wait behind the one being translated.
     public const int MaxWaiting = 3;
 
     // Earlier FINAL segments of the same transcript passed to the translator as context.
@@ -191,6 +195,7 @@ public sealed class TranscriptTranslator : IDisposable
     public void Dispose()
     {
         List<Tracked> follows;
+        bool noWorker;
         lock (_gate)
         {
             if (_disposed)
@@ -201,13 +206,28 @@ public sealed class TranscriptTranslator : IDisposable
             follows = new List<Tracked>(_follows);
             _follows.Clear();
             _queue.Clear();
+            noWorker = _worker is null;
         }
         foreach (Tracked follow in follows)
         {
             ((INotifyCollectionChanged)follow.Transcript.Finals).CollectionChanged -= follow.Handler;
         }
-        _stop.Cancel();
-        _wake.Release();
+        if (noWorker)
+        {
+            _stop.Dispose();
+            _wake.Dispose();
+            return;
+        }
+        // The worker disposes both when it ends.
+        try
+        {
+            _stop.Cancel();
+            _wake.Release();
+        }
+        catch (ObjectDisposedException)
+        {
+            // The worker had already ended.
+        }
     }
 
     private void OnFinalsChanged(Tracked follow, NotifyCollectionChangedEventArgs e)
@@ -264,7 +284,7 @@ public sealed class TranscriptTranslator : IDisposable
             context = string.Join('\n', lines);
         }
 
-        Segment? dropped = null;
+        Work? dropped = null;
         lock (_gate)
         {
             if (_disposed || !_follows.Contains(follow))
@@ -272,27 +292,27 @@ public sealed class TranscriptTranslator : IDisposable
                 return;
             }
             _queue.AddLast(new Work(follow, segment, context, follow.Generation));
-            int waiting = _queue.Count(w => w.Follow == follow);
-            if (waiting > MaxWaiting)
+            if (_queue.Count > MaxWaiting && _queue.First is { } oldest)
             {
-                LinkedListNode<Work>? oldest = _queue.First;
-                while (oldest is not null && oldest.Value.Follow != follow)
-                {
-                    oldest = oldest.Next;
-                }
-                if (oldest is not null)
-                {
-                    dropped = oldest.Value.Segment;
-                    _queue.Remove(oldest);
-                }
+                dropped = oldest.Value;
+                _queue.RemoveFirst();
             }
             _worker ??= Task.Run(RunAsync);
         }
-        _wake.Release();
+        try
+        {
+            _wake.Release();
+        }
+        catch (ObjectDisposedException)
+        {
+            // Disposed meanwhile: nothing is translated any more.
+        }
         if (dropped is not null)
         {
-            Raise(follow, follow.Generation, () =>
-                Skipped?.Invoke(this, new TranslationSkippedEventArgs(follow.Transcript, follow.Track, dropped, null)));
+            Tracked owner = dropped.Follow;
+            Segment skipped = dropped.Segment;
+            Raise(owner, dropped.Generation, () =>
+                Skipped?.Invoke(this, new TranslationSkippedEventArgs(owner.Transcript, owner.Track, skipped, null)));
         }
     }
 
@@ -312,6 +332,19 @@ public sealed class TranscriptTranslator : IDisposable
     }
 
     private async Task RunAsync()
+    {
+        try
+        {
+            await RunLoopAsync().ConfigureAwait(false);
+        }
+        finally
+        {
+            _stop.Dispose();
+            _wake.Dispose();
+        }
+    }
+
+    private async Task RunLoopAsync()
     {
         CancellationToken token = _stop.Token;
         while (!token.IsCancellationRequested)
@@ -389,9 +422,23 @@ public sealed class TranscriptTranslator : IDisposable
             raise();
         }
 
+        // On the worker's thread a throwing handler must not end the worker, which would stop all
+        // translating without a sign. It is reported to Trace instead.
+        void RunOnWorker()
+        {
+            try
+            {
+                Run();
+            }
+            catch (Exception ex)
+            {
+                System.Diagnostics.Trace.TraceError("A TranscriptTranslator event handler threw: " + ex);
+            }
+        }
+
         if (follow.Context is null)
         {
-            Run();
+            RunOnWorker();
         }
         else
         {

@@ -13,6 +13,7 @@
 #include <vector>
 
 #include "backends/backend_loader.h"
+#include "backends/llama_init.h"
 #include "errors.h"
 #include "llama.h"
 #include "mtmd-helper.h"
@@ -235,12 +236,6 @@ std::string rolled_back_prefix(const llama_vocab* vocab, std::string_view prefix
     return text;
 }
 
-// llama_backend_init sets up process-wide state and must run once, before the first model load.
-void init_llama_backend() {
-    static std::once_flag once;
-    std::call_once(once, [] { llama_backend_init(); });
-}
-
 }  // namespace
 
 QwenBackend::QwenBackend(const std::string& model_path, const std::string& mmproj_path,
@@ -253,7 +248,7 @@ QwenBackend::QwenBackend(const std::string& model_path, const std::string& mmpro
         throw std::invalid_argument("n_threads must be at least 1");
     }
     backends::load_backends();
-    init_llama_backend();
+    backends::init_llama_backend();
 
     // A negative n_gpu_layers offloads every layer.
     llama_model_params model_params = llama_model_default_params();

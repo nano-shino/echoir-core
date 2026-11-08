@@ -34,8 +34,8 @@ public interface ITextTranslator
 
 // A loaded translation model. It is separate from the speech engine: it has its own context on the
 // GPU or CPU and never takes the engine's turn, so translating runs in parallel with transcribing.
-// Calls run one at a time in the order they arrive. Dispose may come while a call runs: the model
-// is freed when the call returns.
+// Calls run one at a time, from any thread. Dispose may come while a call runs: the model is freed
+// when the call returns.
 public sealed class EchoirTranslator : ITextTranslator, IDisposable
 {
     private readonly TranslatorHandle _handle;
@@ -53,9 +53,21 @@ public sealed class EchoirTranslator : ITextTranslator, IDisposable
     // thread pool thread. It also runs a few short translations to warm the GPU up, so loading
     // takes a few seconds. Model files that are missing or have the wrong size fail with an
     // EchoirException, and so does an id that is not a translator.
+    public static Task<EchoirTranslator> LoadAsync(
+        string? modelId,
+        string modelsDir,
+        bool useGpu = true,
+        int threads = 0,
+        CancellationToken cancellationToken = default)
+        => LoadAsync(modelId, modelsDir, null, useGpu, threads, cancellationToken);
+
+    // As above, with a catalogue text in the registry format (see EchoirModels) instead of the
+    // built-in one; null or empty is the built-in catalogue. A null modelId is then that
+    // catalogue's default_translator.
     public static async Task<EchoirTranslator> LoadAsync(
         string? modelId,
         string modelsDir,
+        string? registryJson,
         bool useGpu = true,
         int threads = 0,
         CancellationToken cancellationToken = default)
@@ -63,7 +75,7 @@ public sealed class EchoirTranslator : ITextTranslator, IDisposable
         ArgumentException.ThrowIfNullOrEmpty(modelsDir);
         ArgumentOutOfRangeException.ThrowIfNegative(threads);
         (TranslatorHandle handle, string id) = await Task.Run(
-            () => Create(modelId, modelsDir, useGpu, threads), cancellationToken);
+            () => Create(modelId, modelsDir, registryJson, useGpu, threads), cancellationToken);
         if (cancellationToken.IsCancellationRequested)
         {
             handle.Dispose();
@@ -125,15 +137,20 @@ public sealed class EchoirTranslator : ITextTranslator, IDisposable
             {
                 throw EchoirException.FromLastFailure("echoir_translator_translate");
             }
-            // The result is the translator's own, valid until its next call, so it is copied here.
+            // The result is the library's own, valid until this thread's next translate call, so it
+            // is copied here. A field is read only when the result's struct_size covers it, which
+            // is how fields added to the end later are told from a library that lacks them.
+            uint size = result->StructSize;
             return new Translation(
                 Marshal.PtrToStringUTF8(result->Text) ?? string.Empty,
                 result->Capped != 0,
                 result->SourceTokens,
                 result->PromptTokens,
                 result->OutputTokens,
-                TimeSpan.FromMilliseconds(result->PrefillMs),
-                TimeSpan.FromMilliseconds(result->DecodeMs));
+                Covers(size, nameof(TranslationData.PrefillMs), sizeof(double))
+                    ? TimeSpan.FromMilliseconds(result->PrefillMs) : TimeSpan.Zero,
+                Covers(size, nameof(TranslationData.DecodeMs), sizeof(double))
+                    ? TimeSpan.FromMilliseconds(result->DecodeMs) : TimeSpan.Zero);
         }
         finally
         {
@@ -150,16 +167,27 @@ public sealed class EchoirTranslator : ITextTranslator, IDisposable
         _handle.Dispose();
     }
 
+    // True when a native struct of the given size includes the field and all before it.
+    private static bool Covers(uint structSize, string field, int fieldSize)
+        => structSize >= (long)Marshal.OffsetOf<TranslationData>(field) + fieldSize;
+
     private static unsafe (TranslatorHandle Handle, string ModelId) Create(
-        string? modelId, string modelsDir, bool useGpu, int threads)
+        string? modelId, string modelsDir, string? registryJson, bool useGpu, int threads)
     {
+        // The default id is resolved before the native create, so a failure here leaks no handle.
+        string? registryText = string.IsNullOrEmpty(registryJson) ? null : registryJson;
+        string id = string.IsNullOrEmpty(modelId)
+            ? new EchoirModels(registryText).Catalogue().DefaultTranslator ?? string.Empty
+            : modelId;
         using var model = Utf8String.Create(string.IsNullOrEmpty(modelId) ? null : modelId);
         using var dir = Utf8String.Create(modelsDir);
+        using var registry = Utf8String.Create(registryText);
 
         TranslatorParams parameters = default;
         NativeMethods.TranslatorParamsInit(&parameters);
         parameters.ModelId = model.Pointer;
         parameters.ModelsDir = dir.Pointer;
+        parameters.RegistryJson = registry.Pointer;
         parameters.UseGpu = useGpu ? 1 : 0;
         parameters.NThreads = threads;
 
@@ -170,9 +198,6 @@ public sealed class EchoirTranslator : ITextTranslator, IDisposable
             // missing file, InvalidArgument for an unknown id or one that is not a translator.
             throw EchoirException.FromLastFailure("echoir_translator_create_from_model");
         }
-        string id = string.IsNullOrEmpty(modelId)
-            ? new EchoirModels().Catalogue().DefaultTranslator ?? string.Empty
-            : modelId;
         return (new TranslatorHandle(translator), id);
     }
 }
