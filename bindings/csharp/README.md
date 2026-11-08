@@ -30,7 +30,7 @@ the package) and the app links it with no setup of its own. Its simulator slice 
 
 `EchoirTranslator` loads a translation model (`hy-mt2-1.8b-q4_k_m` by default) beside the speech
 engine. It has its own context and never takes the engine's turn, so it runs in parallel with the
-transcribers. `TranslateAsync` translates one line; calls run one at a time.
+transcribers. `TranslateAsync` translates one line; calls run one at a time, from any thread.
 
 ```csharp
 await new EchoirModels().DownloadAsync("hy-mt2-1.8b-q4_k_m", modelsDir);
@@ -50,8 +50,9 @@ follower.Follow(systemTranscriber.Transcript, "system");
 
 - Only FINAL segments are translated, each with the two FINAL segments before it as context (source
   text only), so a late or dropped translation changes nothing for the other lines.
-- While one translation runs, at most `MaxWaiting` (3) segments of a transcript wait. A fourth
-  drops the oldest waiting one, which stays untranslated and is reported by `Skipped`.
+- While one translation runs, at most `MaxWaiting` (3) segments wait, counted over all followed
+  transcripts. A fourth drops the oldest waiting one of any transcript, which stays untranslated and
+  is reported by `Skipped`. Context stays per transcript.
 - A clear of the transcript drops what waits and the result of a translation that is running.
   Call `Reset` after `EchoirTranscriber.Reset()`. A segment id that goes back, as in a new session
   on the same transcript, does the same.

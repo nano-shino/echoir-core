@@ -78,8 +78,10 @@ the JSON text that the library returns.
   afterwards.
 - Event `text` and `detail` pointers are valid only during the callback. In queue mode they stay valid
   until the next `echoir_session_poll()` or until the session is freed.
-- The `echoir_translation` that `echoir_translator_translate()` returns belongs to the translator. It
-  and its text stay valid until the translator's next translate call or until it is freed.
+- The `echoir_translation` that `echoir_translator_translate()` returns belongs to the library, one per
+  calling thread, like the strings of the `*_json` calls. It and its text stay valid until the next
+  `echoir_translator_translate()` call on the same thread, whichever translator that call is on, and
+  another thread's call never changes them.
 - Freeing NULL is a no-op.
 - The buffers that the host passes to the `*_read_audio()` and `*_read_peaks()` calls belong to the
   host.
@@ -92,8 +94,8 @@ the JSON text that the library returns.
   `echoir_session_read_peaks()`, `echoir_session_set_input_muted()` and `echoir_session_read_lag()`
   are thread-safe. They can run on any thread, in either driving mode.
 - `echoir_translator_translate()` is thread-safe: calls on one translator run one at a time. Its
-  result is shared, so a host that translates from several threads copies the result before the
-  next call can run, or keeps one translator per thread.
+  result is kept per calling thread (see Ownership above), so threads can translate on one translator and
+  each reads its own result.
 - Every `echoir_tape_*` call is thread-safe, except `echoir_tape_free()`, which must be the last call
   on the handle.
 - Callbacks run on the thread that drives the session. In mode A, that is the thread that calls
@@ -818,9 +820,11 @@ call is independent of the one before. The generation stops at 5 tokens per sour
 `capped` is then 1, and the text may end mid-sentence. The text is always whole UTF-8.
 
 The result has the translation in `text`, and the numbers `source_tokens`, `prompt_tokens`,
-`output_tokens`, `prefill_ms` and `decode_ms`. It belongs to the translator. A call returns NULL on
+`output_tokens`, `prefill_ms` and `decode_ms`. It belongs to the library and is valid until the next translate call on
+the same thread; copy what you need to keep. A call returns NULL on
 failure: `ECHOIR_ERR_INVALID_ARG` for a NULL argument, a blank text, a language that is not
-supported or a text that does not fit the model's context (about 1900 tokens with the context lines),
+supported or a text that does not fit the model's context (about 1900 tokens; when the context lines do not fit with it, the oldest are dropped first and only
+a text that is too long alone is refused),
 and `ECHOIR_ERR_BACKEND` when the model fails.
 
 ```c

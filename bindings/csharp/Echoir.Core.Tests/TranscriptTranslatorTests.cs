@@ -228,7 +228,7 @@ public sealed class TranscriptTranslatorTests
     }
 
     [TestMethod]
-    public void TwoTranscriptsKeepTheirOwnContextAndLimits()
+    public void TwoTranscriptsKeepTheirOwnContext()
     {
         var script = new ScriptedTranslator();
         using var translator = new TranscriptTranslator(script, "ja");
@@ -248,6 +248,95 @@ public sealed class TranscriptTranslatorTests
         var calls = script.Calls.ToArray();
         Assert.IsNull(calls.Single(c => c.Text == "system one").Context);
         Assert.AreEqual("mic one", calls.Single(c => c.Text == "mic two").Context);
+    }
+
+    [TestMethod]
+    public void TheWaitingLimitIsSharedByAllTranscripts()
+    {
+        var script = new ScriptedTranslator();
+        script.Hold();
+        using var translator = new TranscriptTranslator(script, "en");
+        var seen = Collect(translator);
+        var skipped = new ConcurrentQueue<TranslationSkippedEventArgs>();
+        translator.Skipped += (_, e) => skipped.Enqueue(e);
+        var mic = new Transcript();
+        var system = new Transcript();
+        var app = new Transcript();
+        translator.Follow(mic, "mic");
+        translator.Follow(system, "system");
+        translator.Follow(app, "app");
+
+        AddFinal(mic, Seg(1, "running"));
+        Wait.Until(() => script.Calls.Count == 1, "the first call to start");
+        // Five lines wait over three transcripts, none of which has more than two of its own.
+        AddFinal(mic, Seg(2, "mic 2"));
+        AddFinal(system, Seg(1, "system 1"));
+        AddFinal(app, Seg(1, "app 1"));
+        AddFinal(system, Seg(2, "system 2"));
+        AddFinal(mic, Seg(3, "mic 3"));
+        Wait.Until(() => skipped.Count == 2, "two dropped lines");
+        script.Release();
+        Wait.Until(() => seen.Count == 4, "four translations");
+
+        // The oldest waiting lines overall go, whichever transcript they belong to.
+        CollectionAssert.AreEqual(
+            new[] { ("mic", 2L), ("system", 1L) }, skipped.Select(s => (s.Track, s.SegmentId)).ToArray());
+        CollectionAssert.AreEqual(
+            new[] { ("mic", 1L), ("app", 1L), ("system", 2L), ("mic", 3L) },
+            seen.Select(r => (r.Track, r.SegmentId)).ToArray());
+        // Context is still the transcript's own: system 2 follows system 1, which was not translated.
+        Assert.AreEqual("system 1", script.Calls.Single(c => c.Text == "system 2").Context);
+        Assert.AreEqual("running\nmic 2",script.Calls.Single(c => c.Text == "mic 3").Context);
+    }
+
+    [TestMethod]
+    public void AHandlerThatThrowsDoesNotStopTheWorker()
+    {
+        var script = new ScriptedTranslator();
+        using var translator = new TranscriptTranslator(script, "en");
+        var seen = new ConcurrentQueue<long>();
+        var skipped = new ConcurrentQueue<long>();
+        translator.Translated += (_, e) =>
+        {
+            seen.Enqueue(e.SegmentId);
+            throw new InvalidOperationException("handler failed");
+        };
+        translator.Skipped += (_, e) =>
+        {
+            skipped.Enqueue(e.SegmentId);
+            throw new InvalidOperationException("handler failed");
+        };
+        script.Fail = text => text == "bad" ? new InvalidOperationException("model failed") : null;
+        var transcript = new Transcript();
+        translator.Follow(transcript);
+
+        AddFinal(transcript, Seg(1, "one"));
+        Wait.Until(() => seen.Count == 1, "the first translation");
+        AddFinal(transcript, Seg(2, "bad"));
+        Wait.Until(() => skipped.Count == 1, "the failure");
+        AddFinal(transcript, Seg(3, "three"));
+        Wait.Until(() => seen.Count == 2, "a translation after the throwing handlers");
+        CollectionAssert.AreEqual(new[] { 1L, 3L }, seen.ToArray());
+    }
+
+    [TestMethod]
+    public void DisposeWhileATranslationRunsDropsItsResultAndTheWorkerEnds()
+    {
+        var script = new ScriptedTranslator();
+        script.Hold();
+        var translator = new TranscriptTranslator(script, "en");
+        var seen = Collect(translator);
+        var transcript = new Transcript();
+        translator.Follow(transcript);
+        AddFinal(transcript, Seg(1, "a"));
+        Wait.Until(() => script.Calls.Count == 1, "the call to start");
+
+        translator.Dispose();
+        translator.Dispose();
+        script.Release();
+        Thread.Sleep(100);
+        Assert.AreEqual(0, seen.Count);
+        Assert.ThrowsException<ObjectDisposedException>(() => translator.Follow(new Transcript()));
     }
 
     [TestMethod]

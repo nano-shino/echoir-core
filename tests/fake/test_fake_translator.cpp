@@ -126,9 +126,9 @@ TEST_CASE("fake translator runs calls from several threads one at a time") {
             for (int n = 0; n < 50; ++n) {
                 const std::string text = "line " + std::to_string(i) + " " + std::to_string(n);
                 echoir_translate_request r = request(text.c_str(), "fr");
-                // The result is shared, so a caller on another thread may see another call's text.
-                // The call itself must be safe, and return a result.
-                if (echoir_translator_translate(t, &r) == nullptr) {
+                // The result is this thread's own: another thread's call never changes it.
+                const echoir_translation* result = echoir_translator_translate(t, &r);
+                if (result == nullptr || std::string(result->text) != "[fr] " + text) {
                     ++failures;
                 }
             }
@@ -139,4 +139,32 @@ TEST_CASE("fake translator runs calls from several threads one at a time") {
     }
     CHECK(failures == 0);
     echoir_translator_free(t);
+}
+
+TEST_CASE("fake translator results are per thread and outlive other threads' calls") {
+    echoir_translator* t = create_translator();
+    REQUIRE(t != nullptr);
+    echoir_translate_request mine = request("main thread line", "de");
+    const echoir_translation* result = echoir_translator_translate(t, &mine);
+    REQUIRE(result != nullptr);
+    // Another thread translates, on the same translator and on another one, meanwhile.
+    std::atomic<int> other_failures{0};
+    std::thread other([t, &other_failures] {
+        echoir_translator* second = create_translator();
+        echoir_translate_request r = request("other thread line", "fr");
+        for (int n = 0; n < 20; ++n) {
+            // doctest assertions are not thread-safe, so failures are counted.
+            if (echoir_translator_translate(t, &r) == nullptr ||
+                echoir_translator_translate(second, &r) == nullptr) {
+                ++other_failures;
+            }
+        }
+        echoir_translator_free(second);
+    });
+    other.join();
+    CHECK(other_failures == 0);
+    CHECK(std::string(result->text) == "[de] main thread line");
+    // The text also outlives the translator it came from, until this thread's next call.
+    echoir_translator_free(t);
+    CHECK(std::string(result->text) == "[de] main thread line");
 }

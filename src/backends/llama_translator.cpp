@@ -5,13 +5,13 @@
 #include <cstddef>
 #include <cstdint>
 #include <memory>
-#include <mutex>
 #include <stdexcept>
 #include <string>
 #include <string_view>
 #include <vector>
 
 #include "backends/backend_loader.h"
+#include "backends/llama_init.h"
 #include "errors.h"
 #include "llama.h"
 #include "translate/language.h"
@@ -93,19 +93,13 @@ double millis_since(Clock::time_point start) {
     return std::chrono::duration<double, std::milli>(Clock::now() - start).count();
 }
 
-// llama_backend_init sets up process-wide state and must run once, before the first model load.
-void init_llama_backend() {
-    static std::once_flag once;
-    std::call_once(once, [] { llama_backend_init(); });
-}
-
 }  // namespace
 
 LlamaTranslator::LlamaTranslator(const TranslatorConfig& config)
     : model_(nullptr, &llama_model_free), ctx_(nullptr, &llama_free), style_(config.style) {
     const int n_threads = config.n_threads == 0 ? kDefaultThreads : config.n_threads;
     backends::load_backends();
-    init_llama_backend();
+    backends::init_llama_backend();
 
     // A negative n_gpu_layers offloads every layer.
     llama_model_params model_params = llama_model_default_params();
@@ -157,13 +151,28 @@ translate::Result LlamaTranslator::translate(const translate::Request& request) 
     }
 
     const llama_vocab* vocab = llama_model_get_vocab(model_.get());
-    const translate::Prompt prompt =
-        translate::render_prompt(style_, target_name, line, request.context);
-    std::vector<llama_token> tokens = tokenize(vocab, prompt.prefix, true);
-    const std::vector<llama_token> body = tokenize(vocab, prompt.instruction, false);
-    const std::vector<llama_token> end = tokenize(vocab, prompt.suffix, true);
-    tokens.insert(tokens.end(), body.begin(), body.end());
-    tokens.insert(tokens.end(), end.begin(), end.end());
+    const auto build = [&](std::string_view context) {
+        const translate::Prompt prompt =
+            translate::render_prompt(style_, target_name, line, context);
+        std::vector<llama_token> built = tokenize(vocab, prompt.prefix, true);
+        const std::vector<llama_token> body = tokenize(vocab, prompt.instruction, false);
+        const std::vector<llama_token> end = tokenize(vocab, prompt.suffix, true);
+        built.insert(built.end(), body.begin(), body.end());
+        built.insert(built.end(), end.begin(), end.end());
+        return built;
+    };
+
+    // The context only helps with names and pronouns, so when the prompt leaves too little room
+    // for the generation the oldest context line goes first, and the call is refused only when
+    // the text alone does not fit.
+    std::string context = request.context;
+    std::vector<llama_token> tokens = build(context);
+    while (kContextTokens - static_cast<int>(tokens.size()) < kMinGenerationTokens &&
+           !context.empty()) {
+        const std::size_t newline = context.find('\n');
+        context = newline == std::string::npos ? std::string() : context.substr(newline + 1);
+        tokens = build(context);
+    }
 
     translate::Result result;
     result.source_tokens = static_cast<int>(tokenize(vocab, line, false).size());
@@ -171,8 +180,8 @@ translate::Result LlamaTranslator::translate(const translate::Request& request) 
     const int room = kContextTokens - result.prompt_tokens;
     if (room < kMinGenerationTokens) {
         throw std::invalid_argument(
-            "text and context are too long: " + std::to_string(result.prompt_tokens) +
-            " prompt tokens, the " + "translator holds " + std::to_string(kContextTokens) +
+            "text is too long: " + std::to_string(result.prompt_tokens) +
+            " prompt tokens, the translator holds " + std::to_string(kContextTokens) +
             " with its output");
     }
     // One token more than the limit is sampled to tell a line that ends there from one that is cut.
