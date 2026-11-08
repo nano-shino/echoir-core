@@ -179,10 +179,9 @@ translate::Result LlamaTranslator::translate(const translate::Request& request) 
     result.prompt_tokens = static_cast<int>(tokens.size());
     const int room = kContextTokens - result.prompt_tokens;
     if (room < kMinGenerationTokens) {
-        throw std::invalid_argument(
-            "text is too long: " + std::to_string(result.prompt_tokens) +
-            " prompt tokens, the translator holds " + std::to_string(kContextTokens) +
-            " with its output");
+        throw std::invalid_argument("text is too long: " + std::to_string(result.prompt_tokens) +
+                                    " prompt tokens, the translator holds " +
+                                    std::to_string(kContextTokens) + " with its output");
     }
     // One token more than the limit is sampled to tell a line that ends there from one that is cut.
     const int limit = std::min(translate::generation_cap(result.source_tokens), room - 1);
