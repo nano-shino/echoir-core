@@ -7,6 +7,9 @@ It is built for live transcription. A host loads a model into an engine, opens a
 engine, and then either pushes PCM audio into the session or lets the library capture an audio
 device. The host reads the transcript as events: from a callback, or by polling a queue.
 
+A host can also translate the final lines of a transcript with a translator, a separate object that
+runs beside the engine (see Translator below).
+
 The header is the reference for every declaration. This page explains how the parts fit together and
 what the header's rules mean in practice. For .NET, see [bindings/csharp/README.md](../bindings/csharp/README.md).
 For a process that talks over standard input and output, see [protocol.md](protocol.md).
@@ -66,14 +69,17 @@ the JSON text that the library returns.
 - The strings from `echoir_devices_json()`, `echoir_models_json()` and `echoir_tape_tracks_json()`
   are owned by the library. They stay valid until the next `*_json` call on the same thread. Copy them
   if you need them longer.
-- Engines, sessions and tapes come from a create call. Free them with `echoir_engine_free()`,
-  `echoir_session_free()` and `echoir_tape_free()`. Free the sessions of an engine before the engine.
+- Engines, sessions, tapes and translators come from a create call. Free them with
+  `echoir_engine_free()`, `echoir_session_free()`, `echoir_tape_free()` and
+  `echoir_translator_free()`. Free the sessions of an engine before the engine.
   A tape may be freed before or after the sessions that write it: each session holds its own
   reference.
 - Path strings in the params structs are read during the create call only. The host can release them
   afterwards.
 - Event `text` and `detail` pointers are valid only during the callback. In queue mode they stay valid
   until the next `echoir_session_poll()` or until the session is freed.
+- The `echoir_translation` that `echoir_translator_translate()` returns belongs to the translator. It
+  and its text stay valid until the translator's next translate call or until it is freed.
 - Freeing NULL is a no-op.
 - The buffers that the host passes to the `*_read_audio()` and `*_read_peaks()` calls belong to the
   host.
@@ -85,6 +91,9 @@ the JSON text that the library returns.
 - `echoir_session_push_f32()`, `echoir_session_push_s16()`, `echoir_session_read_audio()`,
   `echoir_session_read_peaks()`, `echoir_session_set_input_muted()` and `echoir_session_read_lag()`
   are thread-safe. They can run on any thread, in either driving mode.
+- `echoir_translator_translate()` is thread-safe: calls on one translator run one at a time. Its
+  result is shared, so a host that translates from several threads copies the result before the
+  next call can run, or keeps one translator per thread.
 - Every `echoir_tape_*` call is thread-safe, except `echoir_tape_free()`, which must be the last call
   on the handle.
 - Callbacks run on the thread that drives the session. In mode A, that is the thread that calls
@@ -128,6 +137,9 @@ The rules for an unexpected size depend on the struct:
   only when the size also covers `tape_track`.
 - **`echoir_model_params`:** a smaller size is accepted if it covers every field up to `model_id`.
   The fields after it take their defaults. A larger size is refused.
+- **`echoir_translator_params`:** as `echoir_model_params`.
+- **`echoir_translate_request`:** a smaller size is accepted if it covers every field up to
+  `target`; `context` is then NULL. A larger size is refused.
 
 ## Lifecycle
 
@@ -741,9 +753,14 @@ Returns the catalogue and the machine as JSON:
 
 ```json
 {"devices":[{"name","type":"gpu"|"cpu","description","integrated","memory_total_mb","memory_free_mb"}],
- "default_vad":{"whisper":id,"qwen":id},
+ "default_vad":{"whisper":id,"qwen":id},"default_translator":id,
  "models":[{<entry>,"files":[{<file>,"present":bool}],"present":bool,"fits":bool}]}
 ```
+
+`default_translator` is the id of the translator that is used when none is named; it is left out when
+the catalogue names none. An entry whose `backend` is `"translator"` is a translation model, and
+has a `prompt_style` field. It is not a speech model, so `echoir_engine_create_from_model()` refuses
+its id.
 
 `registry_json` NULL selects the built-in catalogue. `models_dir` NULL or empty means no file is present.
 `name` is ggml's device id. `description` is its readable name and may be empty. `integrated` marks a GPU
@@ -753,6 +770,64 @@ that shares system memory, so its memory size says little about its speed.
 GPU with the most free memory, or the CPU when there is no GPU. An entry without `min_vram_mb` always
 fits. `devices` is empty in a build without the backends. The string is owned by the library. It returns
 NULL on failure, for example when `registry_json` does not parse.
+
+### Translator
+
+A translator turns one line of text into another language. It is meant for the FINAL lines of a
+transcript: one call per line, a few hundred milliseconds each on a GPU. It is a separate object
+from the engine. It loads its own model into its own llama.cpp context and never takes the
+engine's turn, so translating runs in parallel with the decodes of every session. It costs memory
+on top of the speech model: about 1.5 GB for the default model and 5 GB for the large one
+(`min_vram_mb` in the catalogue).
+
+The catalogue lists two translators, both Hy-MT2 models under the Apache-2.0 licence:
+
+| Id | Size | Use |
+|---|---|---|
+| `hy-mt2-1.8b-q4_k_m` | 1.06 GiB | The default. About 0.3 s for a typical line on a GPU. |
+| `hy-mt2-7b-q4_k_m` | 4.31 GiB | Better quality, especially into Japanese. About 1 s a line, and it can make several sources at once fall behind. |
+
+```c
+void echoir_translator_params_init(echoir_translator_params* p);
+echoir_translator* echoir_translator_create_from_model(const echoir_translator_params* params);
+```
+
+Set `models_dir`, and `model_id` (NULL or an empty string selects the catalogue's
+`default_translator`). `registry_json`, `use_gpu` and `n_threads` are as in `echoir_model_params`.
+The create call checks that the id is a translator and that its file is in `models_dir` with the
+catalogue's size, loads it, and runs a few short translations so that the first real line is not
+slow. An unknown id, or one that is not a translator, is `ECHOIR_ERR_INVALID_ARG`; a missing or
+wrong-size file is `ECHOIR_ERR_MODEL_LOAD`. Run it off the UI thread.
+
+```c
+const echoir_translation* echoir_translator_translate(echoir_translator* t,
+                                                      const echoir_translate_request* request);
+```
+
+Translates `request->text` into the language `request->target`, an ISO code: `en`, `zh`, `zh-Hant`,
+`yue`, `ja`, `ko`, `vi`, `th`, `id`, `ms`, `tl`, `fr`, `de`, `es`, `pt`, `it`, `ru`, `uk`, `pl`, `cs`,
+`nl`, `tr`, `ar`, `fa`, `he`, `hi`, `bn`, `ta`, `te`, `mr`, `gu`, `ur`, `km`, `my`, `bo`, `kk`, `mn`
+or `ug`. `request->source` is optional: the models find the language themselves, so it is only
+checked. `request->context` holds the earlier lines of the same speaker in the source language,
+oldest first, separated by newlines; two lines are enough. They help the model with names and
+pronouns, and they are not translated. Pass source text, not translations, so that a translation
+that was late or dropped changes nothing for the lines after it.
+
+The call is synchronous. Calls on one translator run one at a time. The output is greedy, and each
+call is independent of the one before. The generation stops at 5 tokens per source token plus 32:
+`capped` is then 1, and the text may end mid-sentence. The text is always whole UTF-8.
+
+The result has the translation in `text`, and the numbers `source_tokens`, `prompt_tokens`,
+`output_tokens`, `prefill_ms` and `decode_ms`. It belongs to the translator. A call returns NULL on
+failure: `ECHOIR_ERR_INVALID_ARG` for a NULL argument, a blank text, a language that is not
+supported or a text that does not fit the model's context (about 1900 tokens with the context lines),
+and `ECHOIR_ERR_BACKEND` when the model fails.
+
+```c
+void echoir_translator_free(echoir_translator* t);
+```
+
+Frees the translator and its model. No call may be running on it.
 
 ## Event types
 

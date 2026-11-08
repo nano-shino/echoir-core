@@ -99,6 +99,22 @@ int main(void) {
     EXPECT(echoir_models_json(NULL, NULL) != NULL);
     EXPECT(echoir_models_json("not json", NULL) == NULL);
 
+    /* Translator params: the defaults, and a NULL translator is refused. */
+    {
+        echoir_translator_params tp;
+        echoir_translate_request tr;
+        echoir_translator_params_init(&tp);
+        EXPECT(tp.struct_size == sizeof(echoir_translator_params));
+        EXPECT(tp.model_id == NULL);
+        EXPECT(tp.use_gpu == 1);
+        memset(&tr, 0, sizeof tr);
+        tr.struct_size = (uint32_t)sizeof(echoir_translate_request);
+        tr.text = "Hello.";
+        tr.target = "vi";
+        EXPECT(echoir_translator_translate(NULL, &tr) == NULL);
+        echoir_translator_free(NULL);
+    }
+
     if (g_failures != 0) {
         fprintf(stderr, "c_header: %d check(s) failed\n", g_failures);
         return 1;

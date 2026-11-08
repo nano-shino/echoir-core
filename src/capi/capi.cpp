@@ -7,6 +7,8 @@
 #include <exception>
 #include <filesystem>
 #include <memory>
+#include <mutex>
+#include <optional>
 #include <span>
 #include <stdexcept>
 #include <string>
@@ -23,9 +25,12 @@
 #include "models/resolve.h"
 #include "stream/tape.h"
 #include "text/utf.h"
+#include "translate/prompt.h"
+#include "translate/translator.h"
 
 #ifdef ECHOIR_HAS_ENGINE
 #include "backends/asr_backend.h"
+#include "backends/translator_backend.h"
 #include "stream/engine_gate.h"
 #include "stream/event_queue.h"
 #include "stream/session.h"
@@ -114,6 +119,17 @@ struct echoir_engine {
 struct echoir_engine {};
 #endif
 
+// A translator created by echoir_translator_create_from_model(). It owns its model and shares
+// nothing with an engine. Calls take the mutex, so they run one at a time.
+struct echoir_translator {
+#ifdef ECHOIR_HAS_ENGINE
+    std::unique_ptr<echoir::translate::ITranslator> model;
+#endif
+    std::mutex mutex;
+    std::string text;  // the text of result, kept alive here
+    echoir_translation result{};
+};
+
 #ifdef ECHOIR_HAS_ENGINE
 // A session created by echoir_session_create(). The session refers to the engine's models, so it
 // must be freed before its engine.
@@ -173,6 +189,17 @@ void echoir_model_params_init(echoir_model_params* p) {
     }
     *p = echoir_model_params{};
     p->struct_size = sizeof(echoir_model_params);
+    p->use_gpu = 1;
+}
+
+void echoir_translator_params_init(echoir_translator_params* p) {
+    if (p == nullptr) {
+        set_last_error("echoir_translator_params_init", "params must not be NULL",
+                       ECHOIR_ERR_INVALID_ARG);
+        return;
+    }
+    *p = echoir_translator_params{};
+    p->struct_size = sizeof(echoir_translator_params);
     p->use_gpu = 1;
 }
 
@@ -305,7 +332,129 @@ std::unique_ptr<echoir_engine> make_engine_from_model(const echoir_model_params&
     return make_engine(engine);
 }
 
+// Resolves the translator that params names and loads it. A field after model_id is read only when
+// the struct includes it, and otherwise takes its default.
+std::unique_ptr<echoir_translator> make_translator(const echoir_translator_params& params) {
+    constexpr size_t kEndOfModelId =
+        offsetof(echoir_translator_params, model_id) + sizeof(echoir_translator_params::model_id);
+    constexpr size_t kEndOfUseGpu =
+        offsetof(echoir_translator_params, use_gpu) + sizeof(echoir_translator_params::use_gpu);
+    constexpr size_t kEndOfThreads =
+        offsetof(echoir_translator_params, n_threads) + sizeof(echoir_translator_params::n_threads);
+    if (params.struct_size < kEndOfModelId) {
+        throw std::invalid_argument("struct_size is smaller than the fields up to model_id");
+    }
+    if (params.struct_size > sizeof(echoir_translator_params)) {
+        throw std::invalid_argument("struct_size is larger than echoir_translator_params");
+    }
+#ifndef ECHOIR_FAKE_BACKEND
+    if (params.models_dir == nullptr || params.models_dir[0] == '\0') {
+        throw std::invalid_argument("models_dir is required");
+    }
+#endif
+    const echoir::models::Registry registry =
+        params.registry_json != nullptr ? echoir::models::Registry::parse(params.registry_json)
+                                        : echoir::models::Registry::builtin();
+    std::string model_id = params.model_id != nullptr ? params.model_id : "";
+    if (model_id.empty()) {
+        model_id = registry.default_translator();
+        if (model_id.empty()) {
+            throw std::invalid_argument("model_id is required: the registry names no default");
+        }
+    }
+    const echoir::models::Model* model = registry.find(model_id);
+    if (model == nullptr) {
+        throw std::invalid_argument("'" + model_id + "' is not an id in the registry");
+    }
+    if (model->backend != "translator") {
+        throw std::invalid_argument("'" + model_id + "' is not a translator");
+    }
+    const std::string style_name = model->entry.value("prompt_style", std::string());
+    const std::optional<echoir::translate::PromptStyle> style =
+        echoir::translate::parse_prompt_style(style_name);
+    if (!style) {
+        throw std::invalid_argument("registry entry '" + model_id +
+                                    "' has an unknown prompt_style '" + style_name + "'");
+    }
+    const std::filesystem::path dir = params.models_dir != nullptr
+                                          ? echoir::text::path_from_utf8(params.models_dir)
+                                          : std::filesystem::path();
+    echoir::TranslatorConfig config;
+    config.model_path = echoir::text::path_utf8(echoir::models::resolve(dir, *model, "model"));
+    config.style = *style;
+    config.use_gpu = params.struct_size >= kEndOfUseGpu ? params.use_gpu != 0 : true;
+    config.n_threads = params.struct_size >= kEndOfThreads ? params.n_threads : 0;
+
+    auto translator = std::make_unique<echoir_translator>();
+    translator->model = echoir::make_translator(config);
+    translator->result.struct_size = sizeof(echoir_translation);
+    return translator;
+}
+
 }  // namespace
+
+echoir_translator* echoir_translator_create_from_model(const echoir_translator_params* params) {
+    try {
+        if (params == nullptr) {
+            throw std::invalid_argument("params must not be NULL");
+        }
+        return make_translator(*params).release();
+    } catch (...) {
+        status_of_current_exception("echoir_translator_create_from_model");
+        return nullptr;
+    }
+}
+
+const echoir_translation* echoir_translator_translate(echoir_translator* translator,
+                                                      const echoir_translate_request* request) {
+    try {
+        constexpr size_t kEndOfTarget =
+            offsetof(echoir_translate_request, target) + sizeof(echoir_translate_request::target);
+        constexpr size_t kEndOfContext =
+            offsetof(echoir_translate_request, context) + sizeof(echoir_translate_request::context);
+        if (translator == nullptr) {
+            throw std::invalid_argument("translator must not be NULL");
+        }
+        if (request == nullptr) {
+            throw std::invalid_argument("request must not be NULL");
+        }
+        if (request->struct_size < kEndOfTarget) {
+            throw std::invalid_argument("struct_size is smaller than the fields up to target");
+        }
+        if (request->struct_size > sizeof(echoir_translate_request)) {
+            throw std::invalid_argument("struct_size is larger than echoir_translate_request");
+        }
+        if (request->text == nullptr) {
+            throw std::invalid_argument("text must not be NULL");
+        }
+        if (request->target == nullptr || request->target[0] == '\0') {
+            throw std::invalid_argument("target must not be NULL or empty");
+        }
+        echoir::translate::Request in;
+        in.text = request->text;
+        in.source = request->source != nullptr ? request->source : "";
+        in.target = request->target;
+        if (request->struct_size >= kEndOfContext && request->context != nullptr) {
+            in.context = request->context;
+        }
+
+        const std::lock_guard<std::mutex> lock(translator->mutex);
+        const echoir::translate::Result out = translator->model->translate(in);
+        translator->text = out.text;
+        echoir_translation& result = translator->result;
+        result.text = translator->text.c_str();
+        result.capped = out.capped ? 1 : 0;
+        result.source_tokens = out.source_tokens;
+        result.prompt_tokens = out.prompt_tokens;
+        result.output_tokens = out.output_tokens;
+        result.prefill_ms = out.prefill_ms;
+        result.decode_ms = out.decode_ms;
+        return &result;
+    } catch (...) {
+        status_of_current_exception("echoir_translator_translate");
+        return nullptr;
+    }
+}
 
 echoir_engine* echoir_engine_create(const echoir_engine_params* params) {
     try {
@@ -344,6 +493,21 @@ echoir_engine* echoir_engine_create_from_model(const echoir_model_params*) {
                    ECHOIR_ERR_NOT_IMPLEMENTED);
     return nullptr;
 }
+
+echoir_translator* echoir_translator_create_from_model(const echoir_translator_params*) {
+    set_last_error("echoir_translator_create_from_model",
+                   "the backends are not built (ECHOIR_WITH_WHISPER=OFF)",
+                   ECHOIR_ERR_NOT_IMPLEMENTED);
+    return nullptr;
+}
+
+const echoir_translation* echoir_translator_translate(echoir_translator*,
+                                                      const echoir_translate_request*) {
+    set_last_error("echoir_translator_translate",
+                   "the backends are not built (ECHOIR_WITH_WHISPER=OFF)",
+                   ECHOIR_ERR_NOT_IMPLEMENTED);
+    return nullptr;
+}
 #endif
 
 const char* echoir_models_json(const char* registry_json, const char* models_dir) {
@@ -378,6 +542,8 @@ const char* echoir_devices_json(void) {
 
 // Deleting NULL does nothing, so NULL needs no check. The sessions must be freed first.
 void echoir_engine_free(echoir_engine* engine) { delete engine; }
+
+void echoir_translator_free(echoir_translator* translator) { delete translator; }
 
 #ifdef ECHOIR_HAS_ENGINE
 namespace {

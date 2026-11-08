@@ -34,6 +34,40 @@ internal struct ModelParams
 }
 
 [StructLayout(LayoutKind.Sequential)]
+internal struct TranslatorParams
+{
+    public uint StructSize;
+    public nint RegistryJson;
+    public nint ModelsDir;
+    public nint ModelId;
+    public int UseGpu;
+    public int NThreads;
+}
+
+[StructLayout(LayoutKind.Sequential)]
+internal struct TranslateRequestData
+{
+    public uint StructSize;
+    public nint Text;
+    public nint Source;
+    public nint Target;
+    public nint Context;
+}
+
+[StructLayout(LayoutKind.Sequential)]
+internal struct TranslationData
+{
+    public uint StructSize;
+    public nint Text;
+    public int Capped;
+    public int SourceTokens;
+    public int PromptTokens;
+    public int OutputTokens;
+    public double PrefillMs;
+    public double DecodeMs;
+}
+
+[StructLayout(LayoutKind.Sequential)]
 internal struct EventData
 {
     public int Type;

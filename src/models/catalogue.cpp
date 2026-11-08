@@ -66,6 +66,9 @@ std::string catalogue_json(const Registry& registry, const std::filesystem::path
     json out;
     out["devices"] = std::move(device_list);
     out["default_vad"] = registry.default_vads();
+    if (!registry.default_translator().empty()) {
+        out["default_translator"] = registry.default_translator();
+    }
     out["models"] = std::move(model_list);
     return out.dump(-1, ' ', false, json::error_handler_t::replace);
 }

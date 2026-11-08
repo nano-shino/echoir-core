@@ -11,7 +11,7 @@
  *  - No C++ exception crosses this boundary.
  *  - A handle (engine or session) is used by one thread at a time. The echoir_session_push_*
  *    functions are the exception: they are thread-safe. Sessions of one engine are separate
- *    handles, so each may be driven on its own thread.
+ *    handles, so each may be driven on its own thread. A translator handle is thread-safe too.
  *  - Freeing NULL is a no-op.
  */
 #ifndef ECHOIR_ECHOIR_H
@@ -535,7 +535,7 @@ ECHOIR_API echoir_engine* echoir_engine_create_from_model(const echoir_model_par
 // The catalogue and the machine as JSON, UTF-8:
 //   {"devices":[{"name","type":"gpu"|"cpu","description","integrated","memory_total_mb",
 //                "memory_free_mb"}],
-//    "default_vad":{"whisper":id,"qwen":id},
+//    "default_vad":{"whisper":id,"qwen":id},"default_translator":id,
 //    "models":[{<entry>,"files":[{<file>,"present":bool}],"present":bool,"fits":bool}]}
 // A device name is ggml's device id and description its human-readable name, which may be empty.
 // integrated marks a GPU that shares system memory, so its memory size says little about speed.
@@ -546,6 +546,83 @@ ECHOIR_API echoir_engine* echoir_engine_create_from_model(const echoir_model_par
 // owned by the library, and stays valid until the next *_json call on this thread. Returns NULL on
 // failure, such as a registry_json that does not parse.
 ECHOIR_API const char*    echoir_models_json(const char* registry_json, const char* models_dir);
+
+// Text translation. A translator turns one line of text into another language. It is a separate
+// object from the engine: it has its own model and its own llama.cpp context, and it never takes
+// an engine's turn, so it runs in parallel with the decodes of any session. A translator is meant
+// for the FINAL lines of a transcript, one call per line. It loads a model of the catalogue whose
+// backend is "translator", with the same model_id and models_dir rules as an engine.
+typedef struct echoir_translator echoir_translator;
+
+// Model selection for echoir_translator_create_from_model(). Start from
+// echoir_translator_params_init(). The paths are read during the call only.
+typedef struct {
+  uint32_t    struct_size;             // sizeof(echoir_translator_params). A smaller value is
+                                       // accepted if it covers every field up to model_id; the
+                                       // fields after it take their defaults. A larger value is
+                                       // refused.
+  const char* registry_json;           // catalogue text in the registry format; NULL = built-in
+  const char* models_dir;              // UTF-8 directory with the model file (required for create)
+  const char* model_id;                // registry id of a translator entry; NULL or "" = the
+                                       // catalogue's default_translator
+  int32_t     use_gpu;                 // 1 = GPU backend built into the library, 0 = CPU
+  int32_t     n_threads;               // CPU threads; 0 = default (4)
+} echoir_translator_params;
+
+// One line to translate, for echoir_translator_translate().
+typedef struct {
+  uint32_t    struct_size;             // sizeof(echoir_translate_request). A smaller value is
+                                       // accepted if it covers every field up to target; context
+                                       // is then NULL. A larger value is refused.
+  const char* text;                    // the line, UTF-8 (required, not blank)
+  const char* source;                  // ISO code of its language, or "auto"; NULL or "" = "auto".
+                                       // Only checked: the models find the language themselves.
+  const char* target;                  // ISO code of the language to write (required), such as
+                                       // "en", "vi", "ja", "zh", "zh-Hant". A code the model does
+                                       // not support is ECHOIR_ERR_INVALID_ARG.
+  const char* context;                 // earlier lines of the same speaker in the source language,
+                                       // oldest first, separated by newlines, to help the model
+                                       // with names and pronouns; NULL = none. Two lines are
+                                       // enough. They are not translated.
+} echoir_translate_request;
+
+// The result of a translation. It belongs to the translator and is valid until the translator's
+// next translate call or until it is freed.
+typedef struct {
+  uint32_t    struct_size;             // sizeof(echoir_translation), set by the library
+  const char* text;                    // the translation, whole UTF-8
+  int32_t     capped;                  // 1 = generation stopped at its limit (5 tokens per source
+                                       // token plus 32), so text may end mid-sentence
+  int32_t     source_tokens;           // tokens of the line
+  int32_t     prompt_tokens;           // tokens of the prompt, context and instruction included
+  int32_t     output_tokens;           // tokens generated
+  double      prefill_ms;              // time to read the prompt and pick the first token
+  double      decode_ms;               // time to generate the rest
+} echoir_translation;
+
+// Sets *p to the defaults (registry_json, models_dir and model_id NULL; use_gpu 1; n_threads 0) and
+// sets struct_size. With p NULL, nothing is written and the last error is set.
+ECHOIR_API void           echoir_translator_params_init(echoir_translator_params*);
+
+// Resolves model_id in the catalogue, checks that its file is in models_dir with the catalogue's
+// size, loads it and runs a few short translations so that the first real call is not slow. Free
+// the translator with echoir_translator_free(). Returns NULL on failure. An unknown id, or one that
+// is not a translator, is ECHOIR_ERR_INVALID_ARG, and a missing or wrong-size file is
+// ECHOIR_ERR_MODEL_LOAD. Loading takes a while, so run it off the UI thread.
+ECHOIR_API echoir_translator* echoir_translator_create_from_model(const echoir_translator_params*);
+
+// Translates one line. The call is synchronous and takes about 0.3 s for a typical line on a GPU.
+// Output is greedy and each call is independent of the one before. Calls on one translator are
+// thread-safe and run one at a time, in the order they get the translator; they never wait for an
+// engine. The result is shared by all callers, so use one thread per translator, or copy the
+// result before another call can run. Returns NULL on failure: ECHOIR_ERR_INVALID_ARG for a NULL
+// argument, a blank text, a language that is not supported or a text that does not fit the model's
+// context (about 1900 tokens with its context lines), ECHOIR_ERR_BACKEND when the model fails.
+ECHOIR_API const echoir_translation* echoir_translator_translate(echoir_translator*,
+                                                                 const echoir_translate_request*);
+
+// Frees a translator and its model. No call may be running on it.
+ECHOIR_API void           echoir_translator_free(echoir_translator*);
 // clang-format on
 
 #ifdef __cplusplus

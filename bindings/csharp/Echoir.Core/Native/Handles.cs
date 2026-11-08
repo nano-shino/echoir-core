@@ -42,6 +42,22 @@ internal sealed class SessionHandle : SafeHandleZeroOrMinusOneIsInvalid
     }
 }
 
+// Owns an echoir_translator. A translate call holds a reference, so a Dispose during a call frees
+// the translator when the call returns.
+internal sealed class TranslatorHandle : SafeHandleZeroOrMinusOneIsInvalid
+{
+    public TranslatorHandle(nint translator) : base(ownsHandle: true)
+    {
+        SetHandle(translator);
+    }
+
+    protected override bool ReleaseHandle()
+    {
+        NativeMethods.TranslatorFree(handle);
+        return true;
+    }
+}
+
 // Owns an echoir_tape. Sessions that write the tape hold their own native reference, so the
 // handle may be released before them.
 internal sealed class TapeHandle : SafeHandleZeroOrMinusOneIsInvalid

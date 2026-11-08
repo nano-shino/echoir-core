@@ -26,6 +26,42 @@ project, so the xcframework travels next to the assembly as `Echoir.Core.resourc
 the package) and the app links it with no setup of its own. Its simulator slice is CPU only, so
 `useGpu` has no effect there. The iOS workload must match the installed Xcode.
 
+## Translation
+
+`EchoirTranslator` loads a translation model (`hy-mt2-1.8b-q4_k_m` by default) beside the speech
+engine. It has its own context and never takes the engine's turn, so it runs in parallel with the
+transcribers. `TranslateAsync` translates one line; calls run one at a time.
+
+```csharp
+await new EchoirModels().DownloadAsync("hy-mt2-1.8b-q4_k_m", modelsDir);
+using EchoirTranslator translator = await EchoirTranslator.LoadAsync(null, modelsDir);
+Translation result = await translator.TranslateAsync("Good morning.", "vi");
+```
+
+`TranscriptTranslator` follows the FINAL segments of one or more transcripts and translates them
+through one translator, one at a time:
+
+```csharp
+using var follower = new TranscriptTranslator(translator, "vi");
+follower.Translated += (_, e) => Show(e.Track, e.SegmentId, e.Text, e.Capped);
+follower.Follow(micTranscriber.Transcript, "mic");
+follower.Follow(systemTranscriber.Transcript, "system");
+```
+
+- Only FINAL segments are translated, each with the two FINAL segments before it as context (source
+  text only), so a late or dropped translation changes nothing for the other lines.
+- While one translation runs, at most `MaxWaiting` (3) segments of a transcript wait. A fourth
+  drops the oldest waiting one, which stays untranslated and is reported by `Skipped`.
+- A clear of the transcript drops what waits and the result of a translation that is running.
+  Call `Reset` after `EchoirTranscriber.Reset()`. A segment id that goes back, as in a new session
+  on the same transcript, does the same.
+- `Translated` and `Skipped` are raised on the `SynchronizationContext` that was current at
+  `Follow`, like the events of `EchoirTranscriber`. `Submit` queues a segment again, such as one
+  that was decoded again.
+
+`EchoirModels.Catalogue()` lists the translators with `Backend == "translator"`, and
+`ModelCatalogue.DefaultTranslator` names the default.
+
 ## Build
 
 ```

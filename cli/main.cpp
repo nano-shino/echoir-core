@@ -14,6 +14,8 @@
 #include <exception>
 #include <filesystem>
 #include <iostream>
+#include <memory>
+#include <mutex>
 #include <string>
 #include <vector>
 
@@ -30,6 +32,7 @@
 #include "score.h"
 #include "serve.h"
 #include "stream.h"
+#include "translate.h"
 
 #ifdef _WIN32
 #define WIN32_LEAN_AND_MEAN
@@ -200,6 +203,16 @@ int run(int argc, const CharT* const* argv, const char* argv0) {
     transcribe->add_option("--format", format, "output: text (one line per segment), jsonl or srt")
         ->check(CLI::IsMember({"text", "jsonl", "srt"}))
         ->capture_default_str();
+    CLI::Option* translate_flag = transcribe->add_option(
+        "--translate", transcribe_options.translate_to,
+        "also translate each segment into this language (an ISO code such as en, vi, ja, zh); "
+        "the translation follows its segment: a second line in text, a translation event in "
+        "jsonl, a second cue in srt");
+    transcribe
+        ->add_option("--translator", transcribe_options.translator,
+                     "the translation model, a registry id (default: the registry's default "
+                     "translator)")
+        ->needs(translate_flag);
     // Development only: an empty group hides the option from --help.
     transcribe
         ->add_option("--vad-param", transcribe_options.vad_params,
@@ -315,6 +328,34 @@ int run(int argc, const CharT* const* argv, const char* argv0) {
             cli::EventWriter writer(cli::parse_format(format), stdout, cli::is_terminal(stdout));
             const std::vector<std::filesystem::path> dirs =
                 cli::model_search_dirs(models_dir, argv0);
+
+            // The translator loads first, so a missing model or a language it does not write fails
+            // before any audio is read. It runs on a thread of its own, beside the transcription,
+            // and shares the writer through this lock.
+            std::mutex write_mutex;
+            std::unique_ptr<cli::TranslationWorker> translation;
+            if (!transcribe_options.translate_to.empty()) {
+                translation = std::make_unique<cli::TranslationWorker>(
+                    cli::load_translator(transcribe_options, dirs), transcribe_options.translate_to,
+                    [&](const cli::TranslatedLine& line) {
+                        std::lock_guard<std::mutex> lock(write_mutex);
+                        writer.write_translation(line);
+                    },
+                    [&](std::int64_t id, const std::string& message) {
+                        std::lock_guard<std::mutex> lock(write_mutex);
+                        std::fprintf(stderr, "error: translating segment %lld: %s\n",
+                                     static_cast<long long>(id), message.c_str());
+                    });
+            }
+            const auto write_event = [&](const echoir::SessionEvent& event) {
+                {
+                    std::lock_guard<std::mutex> lock(write_mutex);
+                    writer.write(event);
+                }
+                if (translation && event.type == ECHOIR_EVENT_FINAL) {
+                    translation->submit(event.segment_id, event.start_ms, event.end_ms, event.text);
+                }
+            };
             if (offline) {
                 std::int64_t index = 0;
                 cli::transcribe_offline(transcribe_options, dirs, [&](const cli::Segment& seg) {
@@ -325,13 +366,15 @@ int run(int argc, const CharT* const* argv, const char* argv0) {
                     event.start_ms = seg.start_ms;
                     event.end_ms = seg.end_ms;
                     event.text = seg.text;
-                    writer.write(event);
+                    write_event(event);
                 });
             } else {
-                cli::transcribe_stream(
-                    transcribe_options, chunk_ms,
-                    pace == "realtime" ? cli::Pace::realtime : cli::Pace::none, dirs,
-                    [&](const echoir::SessionEvent& event) { writer.write(event); });
+                cli::transcribe_stream(transcribe_options, chunk_ms,
+                                       pace == "realtime" ? cli::Pace::realtime : cli::Pace::none,
+                                       dirs, write_event);
+            }
+            if (translation) {
+                translation->finish();
             }
         });
     }

@@ -49,6 +49,10 @@ struct TranscribeOptions {
     int max_segment_ms = 10000;
     // Capture only: stop after this many seconds. 0 runs until Ctrl-C.
     double duration_seconds = 0.0;
+    // Translate each final segment into this language (an ISO code). Empty for no translation.
+    std::string translate_to;
+    // The translator: a registry id. Empty takes the catalogue's default.
+    std::string translator;
     // Development only: "key=value" settings for the VAD. See vad::VadOverrides.
     std::vector<std::string> vad_params;
 };

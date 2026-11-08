@@ -88,7 +88,8 @@ third_party/single/, and the Apache-2.0 and LLVM exception texts in third_party/
              whisper.cpp, llama.cpp and libmtmd.
 
    Use in echoir-core
-   - libllama and libmtmd, for the Qwen3-ASR backend (ECHOIR_WITH_QWEN).
+   - libllama and libmtmd, for the Qwen3-ASR backend (ECHOIR_WITH_QWEN). libllama also runs the
+     translation models (13).
    - ggml, the tensor library that the Whisper and Qwen backends and the FireRedVAD network run on,
      with the Metal and Vulkan backends when they are enabled.
 
@@ -172,3 +173,17 @@ third_party/single/, and the Apache-2.0 and LLVM exception texts in third_party/
     - Built as a static library and linked into the core. The session tape (src/stream/tape.cpp)
       encodes its older audio with it into Ogg Opus files and decodes them for reads. The Ogg
       container is written and read by echoir-core's own code (src/audio/ogg_opus.cpp).
+
+13. Hy-MT2 translation models (weights, downloaded, not distributed)
+
+    Authors:  Tencent
+    License:  Apache License, Version 2.0 (licenses/Apache-2.0.txt), as the model cards and the
+              LICENSE.txt files of the Hugging Face repositories state
+    Upstream: https://huggingface.co/tencent/Hy-MT2-1.8B-GGUF and
+              https://huggingface.co/tencent/Hy-MT2-7B-GGUF (Q4_K_M files)
+
+    Use in echoir-core
+    - models/registry.json lists the two files (hy-mt2-1.8b-q4_k_m and hy-mt2-7b-q4_k_m), and
+      tools/fetch-models.sh downloads them. They are not part of any release archive or package.
+    - src/translate/ and src/backends/llama_translator.cpp write the prompts the models were
+      trained on and run them through libllama. No upstream code is copied.

@@ -29,6 +29,11 @@
     <EchoirIosXcframework Condition="'$(EchoirIosXcframework)' == ''"></EchoirIosXcframework>
   </PropertyGroup>
 
+  <!-- The tests build Transcript state directly, as the transcriber's notifications do. -->
+  <ItemGroup>
+    <InternalsVisibleTo Include="Echoir.Core.Tests" />
+  </ItemGroup>
+
   <!-- The license, the third-party notices and the package readme, at the root of the package. -->
   <ItemGroup>
     <None Include="../../../LICENSE" Pack="true" PackagePath="\" />

@@ -128,6 +128,14 @@ std::string event_json(const echoir::SessionEvent& event) {
     return line.dump(-1, ' ', false, nlohmann::ordered_json::error_handler_t::replace);
 }
 
+std::string translation_json(const TranslatedLine& line) {
+    const nlohmann::ordered_json json = {{"type", "translation"},     {"id", line.segment_id},
+                                         {"start_ms", line.start_ms}, {"end_ms", line.end_ms},
+                                         {"lang", line.target},       {"text", line.text},
+                                         {"capped", line.capped}};
+    return json.dump(-1, ' ', false, nlohmann::ordered_json::error_handler_t::replace);
+}
+
 OutputFormat parse_format(const std::string& name) {
     if (name == "text") return OutputFormat::Text;
     if (name == "jsonl") return OutputFormat::Jsonl;
@@ -160,6 +168,29 @@ void EventWriter::write(const echoir::SessionEvent& event) {
             break;
         case OutputFormat::Srt:
             write_srt(event);
+            break;
+    }
+    std::fflush(out_);
+}
+
+void EventWriter::write_translation(const TranslatedLine& line) {
+    // A translation can arrive while a partial is shown.
+    switch (format_) {
+        case OutputFormat::Text:
+            clear_partial();
+            std::fprintf(
+                out_, "%s\n",
+                format_segment(line.start_ms, line.end_ms, "[" + line.target + "] " + line.text)
+                    .c_str());
+            break;
+        case OutputFormat::Jsonl:
+            std::fprintf(out_, "%s\n", translation_json(line).c_str());
+            break;
+        case OutputFormat::Srt:
+            ++subtitle_index_;
+            std::fprintf(out_, "%lld\n%s --> %s\n%s\n\n", static_cast<long long>(subtitle_index_),
+                         format_srt_time(line.start_ms).c_str(),
+                         format_srt_time(line.end_ms).c_str(), line.text.c_str());
             break;
     }
     std::fflush(out_);
