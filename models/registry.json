@@ -1,10 +1,11 @@
 {
   "version": 1,
-  "_comment": "Model catalogue shared by all hosts. Sizes are exact byte counts from the HF API (?blobs=true), or from the conversion for files with convert_from. min_vram_mb values are estimates, to be tuned on hardware. Fetch with tools/fetch-models.sh <id> (or .ps1). An entry with convert_from is built from those upstream files when its hosted file is not available (HTTP 401 or 404). default_vad maps each backend (whisper, qwen) to the VAD it uses when none is given: the CLI, the end-to-end runner and the tests read it.",
+  "_comment": "Model catalogue shared by all hosts. Sizes are exact byte counts from the HF API (?blobs=true), or from the conversion for files with convert_from. min_vram_mb values are estimates, to be tuned on hardware. Fetch with tools/fetch-models.sh <id> (or .ps1). An entry with convert_from is built from those upstream files when its hosted file is not available (HTTP 401 or 404). default_vad maps each backend (whisper, qwen) to the VAD it uses when none is given: the CLI, the end-to-end runner and the tests read it. default_translator is the translator that is used when none is named. An entry with backend translator is a text translation model; prompt_style names the prompt layout the library renders for it.",
   "default_vad": {
     "whisper": "silero-v6.2.0",
     "qwen": "firered-vad-v1"
   },
+  "default_translator": "hy-mt2-1.8b-q4_k_m",
   "models": [
     {
       "id": "whisper-tiny-en",
@@ -101,6 +102,38 @@
         }
       ],
       "min_vram_mb": 3500
+    },
+    {
+      "id": "hy-mt2-1.8b-q4_k_m",
+      "backend": "translator",
+      "display": "Hy-MT2 1.8B translator (Q4_K_M)",
+      "license": "apache-2.0",
+      "prompt_style": "hy-mt2-1.8b",
+      "files": [
+        {
+          "role": "model",
+          "name": "Hy-MT2-1.8B-Q4_K_M.gguf",
+          "url": "https://huggingface.co/tencent/Hy-MT2-1.8B-GGUF/resolve/main/Hy-MT2-1.8B-Q4_K_M.gguf",
+          "size": 1133080448
+        }
+      ],
+      "min_vram_mb": 1500
+    },
+    {
+      "id": "hy-mt2-7b-q4_k_m",
+      "backend": "translator",
+      "display": "Hy-MT2 7B translator (Q4_K_M)",
+      "license": "apache-2.0",
+      "prompt_style": "hy-mt2-7b",
+      "files": [
+        {
+          "role": "model",
+          "name": "Hy-MT2-7B-Q4_K_M.gguf",
+          "url": "https://huggingface.co/tencent/Hy-MT2-7B-GGUF/resolve/main/Hy-MT2-7B-Q4_K_M.gguf",
+          "size": 4624648896
+        }
+      ],
+      "min_vram_mb": 5200
     },
     {
       "id": "firered-vad-v1",

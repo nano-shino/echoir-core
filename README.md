@@ -19,6 +19,9 @@ before the first release.
   or by a live worker thread. One loaded model serves several sessions at once, one per audio
   source; their decodes take turns on it.
 - Voice activity detection with Silero and FireRedVAD.
+- Translation of the final lines into 38 languages with Hy-MT2 (`hy-mt2-1.8b-q4_k_m` by default,
+  `hy-mt2-7b-q4_k_m` for quality), in a translator object of its own that runs beside the speech
+  engine. See [docs/c-api.md](docs/c-api.md).
 - Live capture from microphones, and from loopback devices on Windows, through miniaudio.
 - A session tape that keeps the audio of a whole recording across sessions and model switches, on
   one timeline with a track per input: the newest 2 minutes in memory, older audio as Opus pages on
@@ -313,6 +316,10 @@ build/macos-cpu/bin/echoir transcribe tests/fixtures/jfk.wav --model whisper-tin
 
 # Stream from the microphone for 30 seconds.
 build/macos-cpu/bin/echoir transcribe mic --stream --duration 30 --model whisper-tiny-en
+
+# Transcribe and translate each segment into Vietnamese (fetch hy-mt2-1.8b-q4_k_m first).
+build/macos-cpu/bin/echoir transcribe tests/fixtures/jfk.wav --model whisper-tiny-en --offline \
+  --translate vi
 
 # Run each model on a file, and report the streaming latency of each.
 build/macos-cpu/bin/echoir bench tests/fixtures/jfk.wav --ref tests/fixtures/jfk.ref.txt \

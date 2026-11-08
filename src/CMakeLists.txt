@@ -34,15 +34,17 @@ ${ECHOIR_REGISTRY_LITERALS}    ;
 ")
 configure_file("${ECHOIR_BUILTIN_REGISTRY_TMP}" "${ECHOIR_BUILTIN_REGISTRY_SOURCE}" COPYONLY)
 
-# Pure-logic core: src/audio, src/text, src/stream, src/capture and src/models, except the device
-# query, which needs ggml. No backend dependency, so the unit tests build with no models or
-# submodules. Sources are globbed; CONFIGURE_DEPENDS picks up new files on the next build.
+# Pure-logic core: src/audio, src/text, src/stream, src/capture, src/models and src/translate,
+# except the device query, which needs ggml. No backend dependency, so the unit tests build with
+# no models or submodules. Sources are globbed; CONFIGURE_DEPENDS picks up new files on the next
+# build.
 file(GLOB ECHOIR_PURE_SOURCES CONFIGURE_DEPENDS
   "${CMAKE_CURRENT_SOURCE_DIR}/audio/*.cpp"
   "${CMAKE_CURRENT_SOURCE_DIR}/text/*.cpp"
   "${CMAKE_CURRENT_SOURCE_DIR}/stream/*.cpp"
   "${CMAKE_CURRENT_SOURCE_DIR}/capture/*.cpp"
-  "${CMAKE_CURRENT_SOURCE_DIR}/models/*.cpp")
+  "${CMAKE_CURRENT_SOURCE_DIR}/models/*.cpp"
+  "${CMAKE_CURRENT_SOURCE_DIR}/translate/*.cpp")
 list(FILTER ECHOIR_PURE_SOURCES EXCLUDE REGEX "/models/devices\\.cpp$")
 list(APPEND ECHOIR_PURE_SOURCES "${ECHOIR_BUILTIN_REGISTRY_SOURCE}")
 
@@ -71,7 +73,7 @@ if(ECHOIR_BUILD_WHISPER)
     list(APPEND ECHOIR_ENGINE_SOURCES ${ECHOIR_FAKE_SOURCES})
   endif()
   if(NOT ECHOIR_BUILD_QWEN)
-    list(FILTER ECHOIR_ENGINE_SOURCES EXCLUDE REGEX "/backends/qwen_[^/]*\\.cpp$")
+    list(FILTER ECHOIR_ENGINE_SOURCES EXCLUDE REGEX "/backends/(qwen|llama)_[^/]*\\.cpp$")
   endif()
 endif()
 # Without any engine source there is no engine target, so a core-only build still configures.

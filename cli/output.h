@@ -6,6 +6,7 @@
 #include <string>
 
 #include "stream/session.h"
+#include "translate.h"
 
 namespace echoir::cli {
 
@@ -21,6 +22,11 @@ OutputFormat parse_format(const std::string& name);
 // JSON object.
 std::string event_json(const echoir::SessionEvent& event);
 
+// The JSON object of a translated segment, on one line:
+// {"type":"translation","id","start_ms","end_ms","lang","text","capped"}. The id, start_ms and
+// end_ms are those of the final it translates.
+std::string translation_json(const TranslatedLine& line);
+
 // Whether the stream is an interactive terminal, so the partial text can be redrawn in place.
 bool is_terminal(std::FILE* stream);
 
@@ -35,6 +41,10 @@ public:
     EventWriter(OutputFormat format, std::FILE* out, bool terminal);
 
     void write(const echoir::SessionEvent& event);
+
+    // Writes the translation of a final that was written earlier. Text: the segment's line with
+    // the language in brackets. Jsonl: a translation event. Srt: a second cue with the same times.
+    void write_translation(const TranslatedLine& line);
 
 private:
     void write_text(const echoir::SessionEvent& event);

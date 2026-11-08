@@ -118,6 +118,18 @@ internal static unsafe partial class NativeMethods
     [LibraryImport(Library, EntryPoint = "echoir_engine_create_from_model")]
     internal static partial nint EngineCreateFromModel(ModelParams* p);
 
+    [LibraryImport(Library, EntryPoint = "echoir_translator_params_init")]
+    internal static partial void TranslatorParamsInit(TranslatorParams* p);
+
+    [LibraryImport(Library, EntryPoint = "echoir_translator_create_from_model")]
+    internal static partial nint TranslatorCreateFromModel(TranslatorParams* p);
+
+    [LibraryImport(Library, EntryPoint = "echoir_translator_translate")]
+    internal static partial TranslationData* TranslatorTranslate(nint translator, TranslateRequestData* request);
+
+    [LibraryImport(Library, EntryPoint = "echoir_translator_free")]
+    internal static partial void TranslatorFree(nint translator);
+
     [LibraryImport(Library, EntryPoint = "echoir_models_json")]
     internal static partial nint ModelsJson(nint registryJson, nint modelsDir);
 }

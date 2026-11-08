@@ -12,6 +12,10 @@ target_compile_definitions(echoir_unit_tests PRIVATE
 # opus: the tape tests decode the joined files with libopus directly, as a player would.
 target_link_libraries(echoir_unit_tests PRIVATE
   echoir_options echoir_single echoir_pure echoir opus Threads::Threads)
+if(NOT TARGET echoir_engine)
+  # Without the engine, the engine and translator create calls report ECHOIR_ERR_NOT_IMPLEMENTED.
+  target_compile_definitions(echoir_unit_tests PRIVATE ECHOIR_TEST_NO_ENGINE)
+endif()
 
 add_test(NAME unit COMMAND echoir_unit_tests)
 set_tests_properties(unit PROPERTIES LABELS unit)
@@ -53,7 +57,8 @@ if(TARGET echoir_engine)
     "${CMAKE_CURRENT_SOURCE_DIR}/integration/*.cpp")
   list(REMOVE_ITEM ECHOIR_INTEGRATION_SOURCES
     "${CMAKE_CURRENT_SOURCE_DIR}/integration/test_capi_engine.cpp"
-    "${CMAKE_CURRENT_SOURCE_DIR}/integration/test_capi_capture.cpp")
+    "${CMAKE_CURRENT_SOURCE_DIR}/integration/test_capi_capture.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/integration/test_capi_translator.cpp")
   # The fake build has no real models, so these cases (which check real decoder output) are left out.
   if(NOT ECHOIR_FAKE_BACKEND)
   add_executable(echoir_integration_tests ${ECHOIR_INTEGRATION_SOURCES})
@@ -84,7 +89,8 @@ if(TARGET echoir_engine)
   add_executable(echoir_capi_tests
     "${CMAKE_CURRENT_SOURCE_DIR}/integration/test_main.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/integration/test_capi_engine.cpp"
-    "${CMAKE_CURRENT_SOURCE_DIR}/integration/test_capi_capture.cpp")
+    "${CMAKE_CURRENT_SOURCE_DIR}/integration/test_capi_capture.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/integration/test_capi_translator.cpp")
   target_compile_definitions(echoir_capi_tests PRIVATE
     ECHOIR_SOURCE_DIR="${PROJECT_SOURCE_DIR}")
   target_link_libraries(echoir_capi_tests PRIVATE echoir_options echoir_single echoir echoir_pure)
@@ -127,6 +133,19 @@ if(TARGET echoir_cli)
     set_tests_properties(cli_vad_param_reaches_vad PROPERTIES LABELS unit
       PASS_REGULAR_EXPRESSION "unknown setting for the Silero VAD: bogus"
       SKIP_REGULAR_EXPRESSION "fetch-models")
+  endif()
+
+  # Transcribe the JFK clip and translate it into French with the default translator. The French
+  # text must contain "pays" (country), which every natural translation of the sentence has. Skipped
+  # when a model is not fetched.
+  if(NOT ECHOIR_FAKE_BACKEND)
+    add_test(NAME e2e.translate_jfk_fr COMMAND ${CMAKE_COMMAND}
+      "-DECHOIR=$<TARGET_FILE:echoir_cli>"
+      "-DARGS=transcribe|${CMAKE_CURRENT_SOURCE_DIR}/fixtures/jfk.wav|--model|whisper-tiny-en|--offline|--format|jsonl|--translate|fr"
+      "-DEXPECT=0" "-DMESSAGE=$"
+      "-DOUT_MATCHES=\"type\":\"translation\",\"id\":1,[^\n]*\"lang\":\"fr\",\"text\":\"[^\"]*[Pp]ays"
+      -P "${CMAKE_CURRENT_SOURCE_DIR}/cli_usage.cmake")
+    set_tests_properties(e2e.translate_jfk_fr PROPERTIES LABELS e2e SKIP_REGULAR_EXPRESSION "fetch-models" SKIP_RETURN_CODE 77 TIMEOUT 600)
   endif()
 
   # Usage tests check the exit status (2) and the message. Each of these is reported before any
@@ -184,6 +203,17 @@ if(TARGET echoir_cli)
   add_usage_test(cli_bench_policy_needs_stream
     "bench|${JFK}|--ref|${JFK}|--policy|rollback"
     "--policy requires --stream")
+  # A language the translator does not write is a usage error, reported before any model is read.
+  add_usage_test(cli_translate_language_is_checked
+    "transcribe|${JFK}|--model|whisper-tiny-en|--offline|--translate|xx"
+    "--translate: unsupported language 'xx'")
+  add_usage_test(cli_translator_needs_translate
+    "transcribe|${JFK}|--model|whisper-tiny-en|--offline|--translator|hy-mt2-7b-q4_k_m"
+    "--translator requires --translate")
+  # The translator must be a translator of the registry.
+  add_usage_test(cli_translator_must_be_a_translator
+    "transcribe|${JFK}|--model|whisper-tiny-en|--offline|--translate|vi|--translator|whisper-tiny-en"
+    "whisper-tiny-en is not a translator")
   # The minimum chunk is a streaming option as well, and it is a usage error without --stream.
   add_usage_test(cli_min_chunk_ms_needs_stream
     "transcribe|${JFK}|--model|whisper-tiny-en|--offline|--min-chunk-ms|1000"
@@ -279,6 +309,7 @@ if(TARGET echoir_cli_lib)
   add_executable(echoir_cli_tests
     "${CMAKE_CURRENT_SOURCE_DIR}/cli/test_latency.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/cli/test_event_json.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/cli/test_translate.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/unit/test_main.cpp")
   target_link_libraries(echoir_cli_tests PRIVATE
     echoir_cli_lib echoir_options echoir_single Threads::Threads)
@@ -291,10 +322,32 @@ endif()
 if(ECHOIR_FAKE_BACKEND)
   add_executable(echoir_fake_tests
     "${CMAKE_CURRENT_SOURCE_DIR}/fake/test_fake_engine.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/fake/test_fake_translator.cpp"
     "${CMAKE_CURRENT_SOURCE_DIR}/unit/test_main.cpp")
   target_link_libraries(echoir_fake_tests PRIVATE
     echoir_options echoir_single echoir Threads::Threads)
 
   add_test(NAME fake_engine COMMAND echoir_fake_tests)
   set_tests_properties(fake_engine PROPERTIES LABELS fake)
+
+  # The command line with the scripted translator: every final is followed by its translation, in
+  # each output format and in both modes. The fake translator writes "[<language>] <text>".
+  if(TARGET echoir_cli)
+    set(FAKE_JFK "${CMAKE_CURRENT_SOURCE_DIR}/fixtures/jfk.wav")
+    function(add_fake_translate_test name args matches)
+      add_test(NAME ${name} COMMAND ${CMAKE_COMMAND}
+        "-DECHOIR=$<TARGET_FILE:echoir_cli>" "-DARGS=${args}" "-DEXPECT=0" "-DMESSAGE=$"
+        "-DOUT_MATCHES=${matches}" -P "${CMAKE_CURRENT_SOURCE_DIR}/cli_usage.cmake")
+      set_tests_properties(${name} PROPERTIES LABELS fake)
+    endfunction()
+    add_fake_translate_test(fake_cli_translate_offline_jsonl
+      "transcribe|${FAKE_JFK}|--model|whisper-tiny-en|--offline|--format|jsonl|--translate|vi"
+      "\"type\":\"final\".*\"type\":\"translation\",\"id\":1,.*\"lang\":\"vi\",\"text\":\"\\[vi\\] fake")
+    add_fake_translate_test(fake_cli_translate_stream_text
+      "transcribe|${FAKE_JFK}|--model|whisper-tiny-en|--stream|--translate|ja"
+      "\\[ja\\] fake")
+    add_fake_translate_test(fake_cli_translate_offline_srt
+      "transcribe|${FAKE_JFK}|--model|whisper-tiny-en|--offline|--format|srt|--translate|fr"
+      "\\[fr\\] fake")
+  endif()
 endif()

@@ -20,6 +20,17 @@ on standard input (the file `-`), or live audio from a capture device. It needs 
   the end. `agreement`, the default on Whisper and available on both, keeps the part that the
   latest decodes agree on.
 
+`--translate <language>` also translates each final segment, with a translation model of the
+registry (`--translator <id>`, `hy-mt2-1.8b-q4_k_m` by default; fetch it with
+`tools/fetch-models.sh hy-mt2-1.8b-q4_k_m`). The language is an ISO code such as `en`, `vi`, `ja` or
+`zh`. The model loads before any audio is read, and translates on a thread of its own, so a
+translation can appear after the segments that follow its segment. Each translation carries its
+segment's id and times: in `text` output it is a second line with the same times and the language in
+brackets, in `jsonl` a `{"type":"translation","id","start_ms","end_ms","lang","text","capped"}`
+event, and in `srt` a second cue with the same times. The command line drops no line, so on a slow
+machine the translations of a long file finish after the transcript. A segment's translation uses the
+two segments before it as context. `capped` is true when the model stopped at its generation limit.
+
 Live audio comes from a capture device: `--input mic` is the default microphone, and
 `--input mic:<device>` picks another, by index or part of its name from `echoir devices`. Live
 capture needs `--stream` and runs until Ctrl-C, or for `--duration` seconds. `--input loopback`

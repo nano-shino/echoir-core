@@ -30,6 +30,7 @@ Registry Registry::parse(std::string_view json_text) {
             registry.models_.push_back(std::move(model));
         }
         registry.default_vad_ = doc.at("default_vad").get<std::map<std::string, std::string>>();
+        registry.default_translator_ = doc.value("default_translator", std::string());
         return registry;
     } catch (const nlohmann::json::exception& e) {
         throw std::invalid_argument(std::string("not a model registry: ") + e.what());

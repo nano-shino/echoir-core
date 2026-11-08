@@ -10,11 +10,13 @@ public sealed class ModelCatalogue
     public ModelCatalogue(
         IReadOnlyList<DeviceInfo> devices,
         IReadOnlyDictionary<string, string> defaultVad,
-        IReadOnlyList<ModelInfo> models)
+        IReadOnlyList<ModelInfo> models,
+        string? defaultTranslator = null)
     {
         Devices = devices;
         DefaultVad = defaultVad;
         Models = models;
+        DefaultTranslator = defaultTranslator;
     }
 
     // The compute devices that ggml sees. Empty in a build without the backends.
@@ -24,6 +26,10 @@ public sealed class ModelCatalogue
     public IReadOnlyDictionary<string, string> DefaultVad { get; }
 
     public IReadOnlyList<ModelInfo> Models { get; }
+
+    // The id of the translator used when none is named, or null when the catalogue names none. The
+    // translators are the entries whose Backend is "translator".
+    public string? DefaultTranslator { get; }
 
     public ModelInfo? Find(string id)
     {
@@ -85,7 +91,11 @@ public sealed class ModelCatalogue
         return new ModelCatalogue(
             devices.AsReadOnly(),
             new ReadOnlyDictionary<string, string>(defaultVad),
-            models.AsReadOnly());
+            models.AsReadOnly(),
+            root.TryGetProperty("default_translator", out JsonElement translator)
+                && translator.ValueKind == JsonValueKind.String
+                ? translator.GetString()
+                : null);
     }
 
     private static ModelInfo ParseModel(JsonElement model, long? memoryBudgetMb)

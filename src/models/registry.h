@@ -22,7 +22,7 @@ struct File {
 // One entry of the catalogue.
 struct Model {
     std::string id;       // for example "whisper-tiny-en"
-    std::string backend;  // "whisper", "qwen3-asr" or "vad"
+    std::string backend;  // "whisper", "qwen3-asr", "vad" or "translator"
     std::vector<File> files;
     std::int64_t min_vram_mb = -1;  // estimated memory the model needs; -1 if the entry gives none
     nlohmann::json entry;           // the entry as written, with every field it has
@@ -49,9 +49,13 @@ public:
     // The default VAD of every backend key, for the catalogue's JSON.
     const std::map<std::string, std::string>& default_vads() const { return default_vad_; }
 
+    // The translator used when none is named. Empty when the catalogue names none.
+    const std::string& default_translator() const { return default_translator_; }
+
 private:
     std::vector<Model> models_;
     std::map<std::string, std::string> default_vad_;  // backend key to VAD id
+    std::string default_translator_;
 };
 
 // The catalogue text built into the library. It is generated from models/registry.json at build
