@@ -284,6 +284,23 @@ audio::PcmBuffer read_input(const InputSpec& input, const std::optional<RawPcmFo
     return raw ? decode_raw(bytes, *raw) : decode_stdin_wav(bytes);
 }
 
+std::string read_glossary_file(const std::string& file) {
+    const std::filesystem::path path = text::path_from_utf8(file);
+    std::error_code ec;
+    if (!std::filesystem::is_regular_file(path, ec)) {
+        throw std::runtime_error("cannot read glossary file " + file);
+    }
+    std::ifstream in(path, std::ios::binary);
+    if (!in) {
+        throw std::runtime_error("cannot read glossary file " + file);
+    }
+    std::string raw((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    if (raw.compare(0, 3, "\xEF\xBB\xBF") == 0) {
+        raw.erase(0, 3);
+    }
+    return raw;
+}
+
 std::string read_context(const std::string& text, const std::string& file) {
     std::string raw = text;
     if (!file.empty()) {

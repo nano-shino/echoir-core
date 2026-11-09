@@ -52,6 +52,7 @@ internal struct TranslateRequestData
     public nint Source;
     public nint Target;
     public nint Context;
+    public nint Glossary;
 }
 
 [StructLayout(LayoutKind.Sequential)]

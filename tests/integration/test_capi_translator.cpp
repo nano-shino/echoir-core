@@ -128,6 +128,38 @@ TEST_CASE("translator output is greedy, and context lines do not change the lang
     echoir_translator_free(translator);
 }
 
+TEST_CASE("a glossary pair changes how a name is translated, and one for another term does not") {
+    SKIP_IN_FAKE_BUILD();
+    const auto model = echoir::test::model_file(kModelId);
+    ECHOIR_REQUIRE_OR_SKIP(model, "hy-mt2-1.8b-q4_k_m translator model");
+    echoir_translator* translator = create_translator(models_dir());
+    REQUIRE_MESSAGE(translator != nullptr, echoir_last_error());
+
+    echoir_translate_request r{};
+    r.struct_size = sizeof(r);
+    r.text = "I met Kai at the station and Kai gave me a book.";
+    r.target = "vi";
+    const echoir_translation* plain = echoir_translator_translate(translator, &r);
+    REQUIRE(plain != nullptr);
+    const std::string plain_text = plain->text;
+    const int plain_tokens = plain->prompt_tokens;
+    CHECK(plain_text.find("Kh\xE1\xBA\xA3i") == std::string::npos);
+
+    // The pair of a term that is not in the text or the context is not sent.
+    r.glossary = "Unrelated\tKh\xC3\xB4ng li\xC3\xAAn quan\n";
+    const echoir_translation* unrelated = echoir_translator_translate(translator, &r);
+    REQUIRE(unrelated != nullptr);
+    CHECK(unrelated->prompt_tokens == plain_tokens);
+    CHECK(std::string(unrelated->text) == plain_text);
+
+    r.glossary = "Unrelated\tx\nkai\tKh\xE1\xBA\xA3i\n";
+    const echoir_translation* with_pair = echoir_translator_translate(translator, &r);
+    REQUIRE(with_pair != nullptr);
+    CHECK(with_pair->prompt_tokens > plain_tokens);
+    CHECK(std::string(with_pair->text).find("Kh\xE1\xBA\xA3i") != std::string::npos);
+    echoir_translator_free(translator);
+}
+
 TEST_CASE("translator refuses a language it does not know, and a text that is too long") {
     SKIP_IN_FAKE_BUILD();
     const auto model = echoir::test::model_file(kModelId);

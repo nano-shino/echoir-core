@@ -111,6 +111,57 @@ public sealed class FakeTranslatorTests
     }
 
     [TestMethod]
+    public async Task TheGlossaryReachesTheTranslatorAndIsFilteredThere()
+    {
+        using EchoirTranslator translator = await EchoirTranslator.LoadAsync(null, NoModelsDir);
+        string glossary = TranslationGlossary.Format(new[]
+        {
+            new GlossaryEntry("Kai", "Kaie"),
+            new GlossaryEntry("Shin", "Than"),
+            new GlossaryEntry("Nobody", "None"),
+        })!;
+        Translation result = await translator.TranslateAsync("Hello KAI.", "vi", "en", "Shin spoke.", glossary, default);
+        Assert.AreEqual("[vi] Hello KAI. {Kai=Kaie} {Shin=Than}", result.Text);
+        Assert.AreEqual("[vi] Hello KAI.", translator.Translate("Hello KAI.", "vi").Text);
+        Assert.AreEqual("[vi] Hello KAI. {Kai=Kaie}", translator.Translate("Hello KAI.", "vi", null, null, glossary).Text);
+    }
+
+    [TestMethod]
+    public async Task OnlyTheSmallTranslatorIsProvisional()
+    {
+        using EchoirTranslator small = await EchoirTranslator.LoadAsync(null, NoModelsDir);
+        using EchoirTranslator large = await EchoirTranslator.LoadAsync("hy-mt2-7b-q4_k_m", NoModelsDir);
+        Assert.IsTrue(small.Provisional);
+        Assert.IsFalse(large.Provisional);
+
+        ModelCatalogue catalogue = new EchoirModels().Catalogue();
+        Assert.IsTrue(catalogue.Find("hy-mt2-1.8b-q4_k_m")!.Provisional);
+        Assert.IsFalse(catalogue.Find("hy-mt2-7b-q4_k_m")!.Provisional);
+        Assert.IsFalse(catalogue.Find("whisper-tiny-en")!.Provisional);
+    }
+
+    [TestMethod]
+    public async Task ProvisionalTextFollowsAPartialThroughTheNativeTranslator()
+    {
+        using EchoirTranslator translator = await EchoirTranslator.LoadAsync(null, NoModelsDir);
+        using var follower = new TranscriptTranslator(translator, "fr")
+        {
+            Glossary = new[] { new GlossaryEntry("Kai", "Kaie") },
+        };
+        var seen = new System.Collections.Concurrent.ConcurrentQueue<ProvisionalTranslatedEventArgs>();
+        follower.ProvisionalTranslated += (_, e) => seen.Enqueue(e);
+        var transcript = new Transcript();
+        follower.Follow(transcript, "mic");
+        Assert.IsTrue(follower.ProvisionalActive);
+
+        transcript.ApplyPartial(new Segment(1, 0, 1000, "Hello Kai. How are you doing"));
+        transcript.ApplyPartial(new Segment(1, 0, 1600, "Hello Kai. How are you doing"));
+        Wait.Until(
+            () => seen.ToArray().Any(e => e.StableText == "[fr] Hello Kai. {Kai=Kaie}" && e.TailText == "[fr] How are you doing {Kai=Kaie}"),
+            "stable and tail text");
+    }
+
+    [TestMethod]
     public void TheCatalogueListsTheTranslators()
     {
         ModelCatalogue catalogue = new EchoirModels().Catalogue();
@@ -152,5 +203,31 @@ public sealed class RealTranslatorTests
         transcript.ApplyFinal(new Segment(1, 0, 900, "Thank you very much."));
         Wait.Until(() => seen.Count == 1, "a translation", 30_000);
         StringAssert.Contains(seen.Single().Text.ToLowerInvariant(), "merci");
+    }
+
+    [TestMethod]
+    public async Task AGlossaryPairChangesTheTranslationOfAName()
+    {
+        if (!File.Exists(Path.Combine(TestPaths.ModelsDir, ModelFile)))
+        {
+            Assert.Inconclusive(ModelFile + " is not in models/.");
+        }
+
+        using EchoirTranslator translator = await EchoirTranslator.LoadAsync(null, TestPaths.ModelsDir);
+        const string line = "I met Kai at the station and Kai gave me a book.";
+        Translation plain = await translator.TranslateAsync(line, "vi", "en");
+        string glossary = TranslationGlossary.Format(new[]
+        {
+            new GlossaryEntry("Kai", "Khải"),
+            new GlossaryEntry("Unrelated", "Không liên quan"),
+        })!;
+        Translation withGlossary = await translator.TranslateAsync(line, "vi", "en", null, glossary, default);
+        StringAssert.Contains(withGlossary.Text, "Khải");
+        Assert.IsFalse(plain.Text.Contains("Khải"));
+        // The pair of a term that is not in the line is not sent, so the prompt does not change.
+        Translation unrelatedOnly = await translator.TranslateAsync(
+            line, "vi", "en", null, "Unrelated\tx\n", default);
+        Assert.AreEqual(plain.PromptTokens, unrelatedOnly.PromptTokens);
+        Assert.IsTrue(withGlossary.PromptTokens > plain.PromptTokens);
     }
 }

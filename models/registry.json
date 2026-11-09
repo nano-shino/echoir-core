@@ -109,6 +109,7 @@
       "display": "Hy-MT2 1.8B translator (Q4_K_M)",
       "license": "apache-2.0",
       "prompt_style": "hy-mt2-1.8b",
+      "provisional": true,
       "files": [
         {
           "role": "model",

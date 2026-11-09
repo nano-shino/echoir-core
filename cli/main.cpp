@@ -213,6 +213,12 @@ int run(int argc, const CharT* const* argv, const char* argv0) {
                      "the translation model, a registry id (default: the registry's default "
                      "translator)")
         ->needs(translate_flag);
+    std::string glossary_file;
+    transcribe
+        ->add_option("--glossary-file", glossary_file,
+                     "a UTF-8 file of terms to translate in one way, one \"term<TAB>translation\" "
+                     "per line, the translation in the --translate language")
+        ->needs(translate_flag);
     // Development only: an empty group hides the option from --help.
     transcribe
         ->add_option("--vad-param", transcribe_options.vad_params,
@@ -325,6 +331,9 @@ int run(int argc, const CharT* const* argv, const char* argv0) {
         }
         return guarded([&] {
             transcribe_options.context = cli::read_context(context_text, context_file);
+            if (!glossary_file.empty()) {
+                transcribe_options.glossary = cli::read_glossary_file(glossary_file);
+            }
             cli::EventWriter writer(cli::parse_format(format), stdout, cli::is_terminal(stdout));
             const std::vector<std::filesystem::path> dirs =
                 cli::model_search_dirs(models_dir, argv0);
@@ -345,7 +354,8 @@ int run(int argc, const CharT* const* argv, const char* argv0) {
                         std::lock_guard<std::mutex> lock(write_mutex);
                         std::fprintf(stderr, "error: translating segment %lld: %s\n",
                                      static_cast<long long>(id), message.c_str());
-                    });
+                    },
+                    transcribe_options.glossary);
             }
             const auto write_event = [&](const echoir::SessionEvent& event) {
                 {

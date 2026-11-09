@@ -24,8 +24,9 @@ struct TranslatorConfig {
 std::unique_ptr<translate::ITranslator> make_translator(const TranslatorConfig& config);
 
 namespace fake {
-// "[<target>] <text>": reads no model, and takes ECHOIR_FAKE_TRANSLATE_DELAY_MS milliseconds per
-// call when that is set (clamped to 0..10000).
+// "[<target>] <text>", followed by " {term=translation}" for each glossary pair that applies to
+// the text or its context: reads no model, and takes ECHOIR_FAKE_TRANSLATE_DELAY_MS milliseconds
+// per call when that is set (clamped to 0..10000).
 std::unique_ptr<translate::ITranslator> make_translator();
 }  // namespace fake
 

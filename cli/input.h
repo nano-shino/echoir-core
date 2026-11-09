@@ -76,4 +76,8 @@ audio::PcmBuffer read_input(const InputSpec& input, const std::optional<RawPcmFo
 // std::runtime_error when the file cannot be read or the text is not UTF-8.
 std::string read_context(const std::string& text, const std::string& file);
 
+// The text of a glossary file ("term<TAB>translation" per line) for --glossary-file, with a byte
+// order mark dropped. Throws std::runtime_error when the file cannot be read.
+std::string read_glossary_file(const std::string& file);
+
 }  // namespace echoir::cli

@@ -1,4 +1,5 @@
 using System.Collections.Specialized;
+using System.ComponentModel;
 
 namespace Echoir.Core;
 
@@ -49,6 +50,38 @@ public sealed class TranslationSkippedEventArgs : EventArgs
     public string? Error { get; }
 }
 
+// Raised when a provisional translation of the segment in progress is ready: the translation of
+// what has been said so far, before the FINAL is translated. Track and SegmentId key the line, as
+// for Translated; each event replaces the one before it for the same track and segment.
+//
+// StableText is the translation of the finished sentences of the PARTIAL, which seldom change.
+// TailText is the translation of the unfinished last part, which changes often, so a host can draw
+// it apart (dimmer, for example). Either may be empty, never both. Draw StableText followed by
+// TailText, joined by a space (none for Japanese and Chinese). The FINAL's translation (Translated)
+// replaces all of it; a host drops provisional text when the FINAL arrives, when its transcript is
+// cleared and after a reset.
+public sealed class ProvisionalTranslatedEventArgs : EventArgs
+{
+    public ProvisionalTranslatedEventArgs(
+        Transcript transcript, string track, long segmentId, string stableText, string tailText)
+    {
+        Transcript = transcript;
+        Track = track;
+        SegmentId = segmentId;
+        StableText = stableText;
+        TailText = tailText;
+    }
+
+    public Transcript Transcript { get; }
+    public string Track { get; }
+
+    // The id of the PARTIAL segment, which its FINAL shares.
+    public long SegmentId { get; }
+
+    public string StableText { get; }
+    public string TailText { get; }
+}
+
 // Follows the FINAL segments of one or more transcripts and translates them through one translator.
 //
 // One translation is in flight at a time, for all followed transcripts. While it runs, the segments
@@ -56,7 +89,23 @@ public sealed class TranslationSkippedEventArgs : EventArgs
 // transcripts, the oldest waiting segment overall is dropped and stays untranslated (Skipped), so
 // the translations show the present rather than a backlog. A segment is translated with the two
 // FINAL segments before it in its own transcript as context, source text only, so a late or
-// dropped translation changes nothing for the others. PARTIAL text is never translated.
+// dropped translation changes nothing for the others.
+//
+// Provisional translation. When the translator is Provisional (the small default model) and at
+// most MaxProvisionalTracks transcripts are followed, the segment in progress is translated too,
+// so a translation appears about a second after the words rather than after the FINAL. The newest
+// PARTIAL is split into sentences. A sentence that has text after it and is the same in two
+// PARTIALs in a row (ignoring case, punctuation and spaces) is translated once, and the translation
+// is kept per transcript under that text, so it survives a forced cut that moves speech into the
+// next segment. The unfinished last part is translated speculatively once it has 3 words, and
+// again after it has grown by 2 words; the newest wins. The results are raised as
+// ProvisionalTranslated, one event per change, except that one covering less of the speech than
+// the one before is held back. The FINAL is still translated whole, with the context above, and
+// replaces the provisional text. The translator runs one call at a time, in this order: FINAL
+// segments, stable sentences, tails, taking turns between transcripts. The drop rule above counts
+// FINAL segments only; sentence and tail work that has gone stale is discarded. Context for a
+// sentence or a tail: the two sentences before it in its transcript. With a translator that is
+// not Provisional, or more transcripts followed, PARTIALs are never translated.
 //
 // A clear of a followed transcript, Reset, and a restart of its segment ids (a new session on the
 // same transcript) drop what waits for it, and the result of a translation that was already running
@@ -78,6 +127,20 @@ public sealed class TranscriptTranslator : IDisposable
     // Earlier FINAL segments of the same transcript passed to the translator as context.
     public const int ContextLines = 2;
 
+    // Provisional translation needs no more followed transcripts than this.
+    public const int MaxProvisionalTracks = 2;
+
+    // Words an unfinished sentence needs before it is translated, and how many more before it is
+    // translated again.
+    public const int TailMinWords = 3;
+    public const int TailGrowWords = 2;
+
+    // Earlier sentences passed as context for a sentence or a tail.
+    public const int SentenceContext = 2;
+
+    private const int CacheLimit = 64;
+    private const int HistoryLimit = 6;
+
     private readonly ITextTranslator _translator;
     private readonly string _target;
     private readonly string? _source;
@@ -86,6 +149,10 @@ public sealed class TranscriptTranslator : IDisposable
     private readonly object _gate = new();
     private readonly List<Tracked> _follows = new();
     private readonly LinkedList<Work> _queue = new();
+    private readonly LinkedList<Work> _sentences = new();
+    private string? _glossaryText;
+    private IReadOnlyList<GlossaryEntry> _glossary = Array.Empty<GlossaryEntry>();
+    private int _turn;
     private readonly SemaphoreSlim _wake = new(0);
     private readonly CancellationTokenSource _stop = new();
     private Task? _worker;
@@ -109,6 +176,58 @@ public sealed class TranscriptTranslator : IDisposable
     // Raised for a segment that was dropped or whose translation failed.
     public event EventHandler<TranslationSkippedEventArgs>? Skipped;
 
+    // Raised when the translation of the segment in progress changes (see the class remarks).
+    // Handlers run where Translated does, except that with no synchronization context they run on
+    // the thread that changed the transcript or finished the translation.
+    public event EventHandler<ProvisionalTranslatedEventArgs>? ProvisionalTranslated;
+
+    // The user's terms for TargetLanguage, passed to the translator with every call. The
+    // translator uses the pairs whose term occurs in the text or its context. Setting it forgets
+    // the provisional translations kept so far, which were made without the new terms.
+    public IReadOnlyList<GlossaryEntry> Glossary
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return _glossary;
+            }
+        }
+        set
+        {
+            lock (_gate)
+            {
+                _glossary = value ?? Array.Empty<GlossaryEntry>();
+                _glossaryText = TranslationGlossary.Format(_glossary);
+                foreach (Tracked follow in _follows)
+                {
+                    follow.ForgetTranslations();
+                }
+                _sentences.Clear();
+                foreach (Tracked follow in _follows)
+                {
+                    follow.Queued.Clear();
+                }
+            }
+        }
+    }
+
+    // True when PARTIALs are being translated now: the translator is Provisional and at most
+    // MaxProvisionalTracks transcripts are followed.
+    public bool ProvisionalActive
+    {
+        get
+        {
+            lock (_gate)
+            {
+                return ProvisionalActiveLocked();
+            }
+        }
+    }
+
+    private bool ProvisionalActiveLocked()
+        => !_disposed && _translator.Provisional && _follows.Count <= MaxProvisionalTracks;
+
     // Starts translating the FINAL segments added to transcript.Finals from now on; the segments
     // already there are not translated. track names the transcript in the events. Following a
     // transcript twice throws InvalidOperationException.
@@ -128,7 +247,15 @@ public sealed class TranscriptTranslator : IDisposable
             _follows.Add(follow);
         }
         follow.Handler = (_, e) => OnFinalsChanged(follow, e);
+        follow.PartialHandler = (_, e) =>
+        {
+            if (e.PropertyName == nameof(Transcript.Partial))
+            {
+                OnPartialChanged(follow);
+            }
+        };
         ((INotifyCollectionChanged)transcript.Finals).CollectionChanged += follow.Handler;
+        transcript.PropertyChanged += follow.PartialHandler;
     }
 
     // Stops following a transcript and drops what waits for it.
@@ -147,6 +274,7 @@ public sealed class TranscriptTranslator : IDisposable
             DropAllLocked(follow);
         }
         ((INotifyCollectionChanged)transcript.Finals).CollectionChanged -= follow.Handler;
+        transcript.PropertyChanged -= follow.PartialHandler;
     }
 
     // Drops the segments waiting for a followed transcript (all followed transcripts with null) and
@@ -206,11 +334,13 @@ public sealed class TranscriptTranslator : IDisposable
             follows = new List<Tracked>(_follows);
             _follows.Clear();
             _queue.Clear();
+            _sentences.Clear();
             noWorker = _worker is null;
         }
         foreach (Tracked follow in follows)
         {
             ((INotifyCollectionChanged)follow.Transcript.Finals).CollectionChanged -= follow.Handler;
+            follow.Transcript.PropertyChanged -= follow.PartialHandler;
         }
         if (noWorker)
         {
@@ -257,6 +387,7 @@ public sealed class TranscriptTranslator : IDisposable
                                 DropAllLocked(follow);
                             }
                             follow.LastId = segment.Id;
+                            follow.NoteFinal(segment.Text, HistoryLimit);
                         }
                         Enqueue(follow, segment, index);
                         index = index < 0 ? index : index + 1;
@@ -291,7 +422,7 @@ public sealed class TranscriptTranslator : IDisposable
             {
                 return;
             }
-            _queue.AddLast(new Work(follow, segment, context, follow.Generation));
+            _queue.AddLast(Work.ForFinal(follow, segment, context, follow.Generation));
             if (_queue.Count > MaxWaiting && _queue.First is { } oldest)
             {
                 dropped = oldest.Value;
@@ -310,7 +441,7 @@ public sealed class TranscriptTranslator : IDisposable
         if (dropped is not null)
         {
             Tracked owner = dropped.Follow;
-            Segment skipped = dropped.Segment;
+            Segment skipped = dropped.Segment!;
             Raise(owner, dropped.Generation, () =>
                 Skipped?.Invoke(this, new TranslationSkippedEventArgs(owner.Transcript, owner.Track, skipped, null)));
         }
@@ -320,12 +451,19 @@ public sealed class TranscriptTranslator : IDisposable
     private void DropAllLocked(Tracked follow)
     {
         follow.Generation++;
-        for (LinkedListNode<Work>? node = _queue.First; node is not null;)
+        RemoveWork(_queue, follow);
+        RemoveWork(_sentences, follow);
+        follow.ResetProvisional();
+    }
+
+    private static void RemoveWork(LinkedList<Work> list, Tracked follow)
+    {
+        for (LinkedListNode<Work>? node = list.First; node is not null;)
         {
             LinkedListNode<Work>? next = node.Next;
             if (node.Value.Follow == follow)
             {
-                _queue.Remove(node);
+                list.Remove(node);
             }
             node = next;
         }
@@ -358,39 +496,91 @@ public sealed class TranscriptTranslator : IDisposable
                 return;
             }
 
-            Work? work;
-            lock (_gate)
+            // Work is picked again after every call, so a FINAL segment that arrived meanwhile
+            // goes before the sentences and tails that were waiting.
+            while (!token.IsCancellationRequested)
             {
-                work = _queue.First?.Value;
-                if (work is not null)
+                Work? work;
+                string? glossary;
+                lock (_gate)
                 {
-                    _queue.RemoveFirst();
+                    work = PickLocked();
+                    glossary = _glossaryText;
+                }
+                if (work is null)
+                {
+                    break;
+                }
+                if (!await RunWorkAsync(work, glossary, token).ConfigureAwait(false))
+                {
+                    return;
                 }
             }
-            if (work is null)
+        }
+    }
+
+    // Takes the next job: FINAL segments, then stable sentences, then tails. Under the gate.
+    private Work? PickLocked()
+    {
+        if (_queue.First is { } first)
+        {
+            _queue.RemoveFirst();
+            return first.Value;
+        }
+        if (!ProvisionalActiveLocked())
+        {
+            _sentences.Clear();
+            return null;
+        }
+        while (_sentences.First is { } node)
+        {
+            _sentences.RemoveFirst();
+            Work sentence = node.Value;
+            Tracked owner = sentence.Follow;
+            if (owner.Generation != sentence.Generation || !_follows.Contains(owner) || !owner.Wants(sentence.Key!))
             {
+                owner.Queued.Remove(sentence.Key!);
                 continue;
             }
+            return sentence;
+        }
+        for (int step = 0; step < _follows.Count; step++)
+        {
+            int index = (_turn + step) % _follows.Count;
+            Tracked owner = _follows[index];
+            if (owner.NextTail() is { } tail)
+            {
+                _turn = index + 1;
+                return Work.ForTail(owner, tail, owner.ContextBefore(tail.Index, SentenceContext), owner.Generation);
+            }
+        }
+        return null;
+    }
 
-            Translation? translation = null;
-            string? error = null;
-            try
-            {
-                translation = await _translator
-                    .TranslateAsync(work.Segment.Text, _target, _source, work.Context, token)
-                    .ConfigureAwait(false);
-            }
-            catch (OperationCanceledException) when (token.IsCancellationRequested)
-            {
-                return;
-            }
-            catch (Exception ex)
-            {
-                error = ex.Message;
-            }
+    // Translates one job and raises its result. False when the translator was cancelled.
+    private async Task<bool> RunWorkAsync(Work work, string? glossary, CancellationToken token)
+    {
+        Translation? translation = null;
+        string? error = null;
+        try
+        {
+            translation = await _translator
+                .TranslateAsync(work.Text, _target, _source, work.Context, glossary, token)
+                .ConfigureAwait(false);
+        }
+        catch (OperationCanceledException) when (token.IsCancellationRequested)
+        {
+            return false;
+        }
+        catch (Exception ex)
+        {
+            error = ex.Message;
+        }
 
-            Tracked follow = work.Follow;
-            Segment segment = work.Segment;
+        Tracked follow = work.Follow;
+        if (work.Kind == WorkKind.Final)
+        {
+            Segment segment = work.Segment!;
             if (translation is not null)
             {
                 Translation ready = translation;
@@ -402,19 +592,167 @@ public sealed class TranscriptTranslator : IDisposable
                 Raise(follow, work.Generation, () =>
                     Skipped?.Invoke(this, new TranslationSkippedEventArgs(follow.Transcript, follow.Track, segment, error)));
             }
+            return true;
         }
+
+        // A sentence or a tail. A failure is not reported: the FINAL's translation is the one that
+        // counts, and a failed sentence is not tried again.
+        ProvisionalTranslatedEventArgs? update = null;
+        lock (_gate)
+        {
+            if (follow.Generation == work.Generation)
+            {
+                if (work.Kind == WorkKind.Sentence)
+                {
+                    follow.Queued.Remove(work.Key!);
+                    if (translation is not null)
+                    {
+                        follow.Remember(work.Key!, translation.Text, CacheLimit);
+                    }
+                    else
+                    {
+                        follow.Failed.Add(work.Key!);
+                    }
+                }
+                else if (translation is not null)
+                {
+                    follow.TailTranslation = new TailTranslation(work.SegmentId, work.Index, work.Text, translation.Text);
+                }
+                update = ComposeLocked(follow);
+            }
+        }
+        RaiseProvisional(follow, update);
+        return true;
+    }
+
+    // Builds the provisional text of the follow's segment in progress from the kept translations,
+    // or null when there is nothing new to show. A translation that covers less of the speech than
+    // the one shown is held back. Under the gate.
+    private ProvisionalTranslatedEventArgs? ComposeLocked(Tracked follow)
+    {
+        if (follow.Pieces.Count == 0)
+        {
+            return null;
+        }
+        var stable = new List<string>();
+        string tail = string.Empty;
+        double covered = 0;
+        int complete = follow.Pieces.Count - 1;
+        bool allKnown = true;
+        TailTranslation? speculative =
+            follow.TailTranslation is { } t && t.SegmentId == follow.PartialId ? t : null;
+        for (int i = 0; i < complete; i++)
+        {
+            if (follow.Cache.TryGetValue(follow.Keys[i], out string? text))
+            {
+                stable.Add(text);
+                covered += SentenceText.Words(follow.Pieces[i]);
+                continue;
+            }
+            // A speculative translation made when this sentence was still the tail holds its place.
+            if (speculative is not null && speculative.Index == i)
+            {
+                tail = speculative.Text;
+                covered += SentenceText.Words(speculative.Source);
+            }
+            allKnown = false;
+            break;
+        }
+        if (allKnown && speculative is not null && speculative.Index == complete)
+        {
+            tail = speculative.Text;
+            covered += SentenceText.Words(speculative.Source);
+        }
+
+        string stableText = SentenceText.Join(stable, _target);
+        if ((stableText.Length == 0 && tail.Length == 0)
+            || covered < follow.ShownCover
+            || (stableText == follow.ShownStable && tail == follow.ShownTail))
+        {
+            return null;
+        }
+        follow.ShownCover = covered;
+        follow.ShownStable = stableText;
+        follow.ShownTail = tail;
+        return new ProvisionalTranslatedEventArgs(follow.Transcript, follow.Track, follow.PartialId, stableText, tail);
+    }
+
+    // Reads the follow's PARTIAL: finds the sentences that became stable, queues them, notes the
+    // tail, and shows what is already translated of it.
+    private void OnPartialChanged(Tracked follow)
+    {
+        Segment? partial = follow.Transcript.Partial;
+        ProvisionalTranslatedEventArgs? update = null;
+        lock (_gate)
+        {
+            if (_disposed || !_follows.Contains(follow))
+            {
+                return;
+            }
+            if (partial is null || string.IsNullOrWhiteSpace(partial.Text) || !ProvisionalActiveLocked())
+            {
+                follow.EndPartial();
+                RemoveWork(_sentences, follow);
+                follow.Queued.Clear();
+                return;
+            }
+            if (partial.Id < follow.PartialId)
+            {
+                // Ids went back: a new session on the same transcript.
+                follow.ResetProvisional();
+                RemoveWork(_sentences, follow);
+            }
+            List<string> pieces = SentenceText.Split(partial.Text);
+            follow.SetPartial(partial.Id, pieces);
+            for (int i = 0; i < pieces.Count - 1; i++)
+            {
+                if (follow.IsStable(i) && follow.Wants(follow.Keys[i]) && follow.Queued.Add(follow.Keys[i]))
+                {
+                    _sentences.AddLast(Work.ForSentence(
+                        follow, partial.Id, i, pieces[i], follow.Keys[i], follow.ContextBefore(i, SentenceContext), follow.Generation));
+                }
+            }
+            follow.PrepareTail();
+            update = ComposeLocked(follow);
+            _worker ??= Task.Run(RunAsync);
+        }
+        try
+        {
+            _wake.Release();
+        }
+        catch (ObjectDisposedException)
+        {
+            // Disposed meanwhile.
+        }
+        RaiseProvisional(follow, update);
+    }
+
+    private void RaiseProvisional(Tracked follow, ProvisionalTranslatedEventArgs? update)
+    {
+        if (update is null)
+        {
+            return;
+        }
+        int generation;
+        lock (_gate)
+        {
+            generation = follow.Generation;
+        }
+        // A provisional text is stale once the FINAL of its segment has been seen.
+        Raise(follow, generation, () => ProvisionalTranslated?.Invoke(this, update), () => update.SegmentId > follow.LastId);
     }
 
     // Runs the raise on the follow's context, if the follow was not reset or stopped meanwhile. The
     // check runs on that context, which is also where Reset is called, so a result cannot arrive
     // after the reset that made it stale.
-    private void Raise(Tracked follow, int generation, Action raise)
+    private void Raise(Tracked follow, int generation, Action raise, Func<bool>? stillValid = null)
     {
         void Run()
         {
             lock (_gate)
             {
-                if (_disposed || follow.Generation != generation || !_follows.Contains(follow))
+                if (_disposed || follow.Generation != generation || !_follows.Contains(follow)
+                    || (stillValid is not null && !stillValid()))
                 {
                     return;
                 }
@@ -459,13 +797,179 @@ public sealed class TranscriptTranslator : IDisposable
         public string Track { get; }
         public SynchronizationContext? Context { get; }
         public NotifyCollectionChangedEventHandler Handler { get; set; } = static (_, _) => { };
+        public PropertyChangedEventHandler PartialHandler { get; set; } = static (_, _) => { };
 
         // Bumped by every drop. Under the gate.
         public int Generation { get; set; }
 
         // The id of the newest segment seen. Under the gate.
         public long LastId { get; set; } = long.MinValue;
+
+        // Provisional translation, all under the gate. Cache holds sentence translations by key,
+        // oldest first in _order. Queued and Failed are keys. _history holds the sentences of the
+        // FINAL segments, for context.
+        public Dictionary<string, string> Cache { get; } = new();
+        private readonly Queue<string> _order = new();
+        public HashSet<string> Queued { get; } = new();
+        public HashSet<string> Failed { get; } = new();
+        private readonly List<string> _history = new();
+
+        // The sentences of the newest PARTIAL (the last is the tail), their keys, and the keys of
+        // the PARTIAL before it.
+        public long PartialId { get; private set; } = long.MinValue;
+        public List<string> Pieces { get; private set; } = new();
+        public List<string> Keys { get; private set; } = new();
+        private List<string>? _previousKeys;
+
+        private TailCandidate? _tail;
+        private TailCandidate? _tailDone;
+        public TailTranslation? TailTranslation { get; set; }
+
+        // What the host was last shown for the segment, and how much speech it covers.
+        public double ShownCover { get; set; }
+        public string? ShownStable { get; set; }
+        public string? ShownTail { get; set; }
+
+        public void SetPartial(long id, List<string> pieces)
+        {
+            if (id != PartialId)
+            {
+                _previousKeys = null;
+                TailTranslation = null;
+                _tailDone = null;
+                ShownCover = 0;
+                ShownStable = null;
+                ShownTail = null;
+                PartialId = id;
+            }
+            else
+            {
+                _previousKeys = Keys;
+            }
+            Pieces = pieces;
+            Keys = pieces.Select(SentenceText.Key).ToList();
+        }
+
+        // True when sentence i is complete and was the same in the PARTIAL before.
+        public bool IsStable(int i)
+            => _previousKeys is not null && i < _previousKeys.Count - 1 && _previousKeys[i] == Keys[i];
+
+        // True when the sentence has a key worth translating, no translation yet, and is in the
+        // newest PARTIAL.
+        public bool Wants(string key)
+            => key.Length > 0 && !Cache.ContainsKey(key) && !Failed.Contains(key) && Keys.Contains(key);
+
+        public void PrepareTail()
+        {
+            _tail = Pieces.Count > 0 && Keys[^1].Length > 0
+                ? new TailCandidate(PartialId, Pieces.Count - 1, Pieces[^1])
+                : null;
+        }
+
+        // The tail if it should be translated now: 3 words, and 2 more than at its last
+        // translation when that was the same sentence of the same segment.
+        public TailCandidate? NextTail()
+        {
+            TailCandidate? tail = _tail;
+            if (tail is null || SentenceText.Words(tail.Text) < TailMinWords)
+            {
+                return null;
+            }
+            if (_tailDone is { } done && done.SegmentId == tail.SegmentId && done.Index == tail.Index
+                && SentenceText.Words(tail.Text) - SentenceText.Words(done.Text) < TailGrowWords)
+            {
+                return null;
+            }
+            _tailDone = tail;
+            return tail;
+        }
+
+        // The sentences before sentence index: from the FINAL segments, then the PARTIAL.
+        public string? ContextBefore(int index, int count)
+        {
+            var before = new List<string>(_history);
+            before.AddRange(Pieces.Take(Math.Min(index, Pieces.Count)));
+            string[] last = before.Skip(Math.Max(0, before.Count - count)).ToArray();
+            return last.Length == 0 ? null : string.Join('\n', last);
+        }
+
+        public void Remember(string key, string translation, int limit)
+        {
+            if (Cache.TryAdd(key, translation))
+            {
+                _order.Enqueue(key);
+                while (_order.Count > limit)
+                {
+                    Cache.Remove(_order.Dequeue());
+                }
+            }
+        }
+
+        public void NoteFinal(string text, int limit)
+        {
+            _history.AddRange(SentenceText.Split(text));
+            if (_history.Count > limit)
+            {
+                _history.RemoveRange(0, _history.Count - limit);
+            }
+        }
+
+        // The PARTIAL is gone (its FINAL came, or it was cleared): its state is stale, the kept
+        // translations are not.
+        public void EndPartial()
+        {
+            Pieces = new List<string>();
+            Keys = new List<string>();
+            _previousKeys = null;
+            _tail = null;
+            _tailDone = null;
+            TailTranslation = null;
+            ShownCover = 0;
+            ShownStable = null;
+            ShownTail = null;
+        }
+
+        public void ForgetTranslations()
+        {
+            Cache.Clear();
+            _order.Clear();
+            Failed.Clear();
+            TailTranslation = null;
+            _tailDone = null;
+            ShownCover = 0;
+            ShownStable = null;
+            ShownTail = null;
+        }
+
+        // A clear, a reset or a new session: nothing of the old text is kept.
+        public void ResetProvisional()
+        {
+            EndPartial();
+            ForgetTranslations();
+            Queued.Clear();
+            _history.Clear();
+            PartialId = long.MinValue;
+        }
     }
 
-    private sealed record Work(Tracked Follow, Segment Segment, string? Context, int Generation);
+    private sealed record TailCandidate(long SegmentId, int Index, string Text);
+
+    private sealed record TailTranslation(long SegmentId, int Index, string Source, string Text);
+
+    private enum WorkKind { Final, Sentence, Tail }
+
+    private sealed record Work(
+        WorkKind Kind, Tracked Follow, string Text, string? Context, int Generation,
+        Segment? Segment = null, string? Key = null, long SegmentId = 0, int Index = 0)
+    {
+        public static Work ForFinal(Tracked follow, Segment segment, string? context, int generation)
+            => new(WorkKind.Final, follow, segment.Text, context, generation, Segment: segment);
+
+        public static Work ForSentence(
+            Tracked follow, long segmentId, int index, string text, string key, string? context, int generation)
+            => new(WorkKind.Sentence, follow, text, context, generation, Key: key, SegmentId: segmentId, Index: index);
+
+        public static Work ForTail(Tracked follow, TailCandidate tail, string? context, int generation)
+            => new(WorkKind.Tail, follow, tail.Text, context, generation, SegmentId: tail.SegmentId, Index: tail.Index);
+    }
 }

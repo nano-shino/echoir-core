@@ -14,6 +14,7 @@
 #include "backends/llama_init.h"
 #include "errors.h"
 #include "llama.h"
+#include "translate/glossary.h"
 #include "translate/language.h"
 #include "translate/output.h"
 #include "translate/prompt.h"
@@ -151,9 +152,12 @@ translate::Result LlamaTranslator::translate(const translate::Request& request) 
     }
 
     const llama_vocab* vocab = llama_model_get_vocab(model_.get());
+    // Only the glossary pairs whose term is in the line or its context are sent.
+    std::vector<translate::GlossaryEntry> glossary = translate::select_glossary(
+        translate::parse_glossary(request.glossary), line, request.context);
     const auto build = [&](std::string_view context) {
         const translate::Prompt prompt =
-            translate::render_prompt(style_, target_name, line, context);
+            translate::render_prompt(style_, target_name, line, context, glossary);
         std::vector<llama_token> built = tokenize(vocab, prompt.prefix, true);
         const std::vector<llama_token> body = tokenize(vocab, prompt.instruction, false);
         const std::vector<llama_token> end = tokenize(vocab, prompt.suffix, true);
@@ -163,14 +167,18 @@ translate::Result LlamaTranslator::translate(const translate::Request& request) 
     };
 
     // The context only helps with names and pronouns, so when the prompt leaves too little room
-    // for the generation the oldest context line goes first, and the call is refused only when
-    // the text alone does not fit.
+    // for the generation the oldest context line goes first, then the last glossary pair, and the
+    // call is refused only when the text alone does not fit.
     std::string context = request.context;
     std::vector<llama_token> tokens = build(context);
     while (kContextTokens - static_cast<int>(tokens.size()) < kMinGenerationTokens &&
-           !context.empty()) {
-        const std::size_t newline = context.find('\n');
-        context = newline == std::string::npos ? std::string() : context.substr(newline + 1);
+           (!context.empty() || !glossary.empty())) {
+        if (!context.empty()) {
+            const std::size_t newline = context.find('\n');
+            context = newline == std::string::npos ? std::string() : context.substr(newline + 1);
+        } else {
+            glossary.pop_back();
+        }
         tokens = build(context);
     }
 

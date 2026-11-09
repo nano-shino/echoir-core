@@ -48,7 +48,7 @@ follower.Follow(micTranscriber.Transcript, "mic");
 follower.Follow(systemTranscriber.Transcript, "system");
 ```
 
-- Only FINAL segments are translated, each with the two FINAL segments before it as context (source
+- FINAL segments are translated whole, each with the two FINAL segments before it as context (source
   text only), so a late or dropped translation changes nothing for the other lines.
 - While one translation runs, at most `MaxWaiting` (3) segments wait, counted over all followed
   transcripts. A fourth drops the oldest waiting one of any transcript, which stays untranslated and
@@ -59,6 +59,38 @@ follower.Follow(systemTranscriber.Transcript, "system");
 - `Translated` and `Skipped` are raised on the `SynchronizationContext` that was current at
   `Follow`, like the events of `EchoirTranscriber`. `Submit` queues a segment again, such as one
   that was decoded again.
+
+### Translating while a line is spoken
+
+With a translator whose catalogue entry has `"provisional": true` (`EchoirTranslator.Provisional`,
+`ModelInfo.Provisional`; the default 1.8B model) and at most two followed transcripts, the follower also
+translates the segment in progress and raises `ProvisionalTranslated`, about a second after the words:
+
+```csharp
+follower.ProvisionalTranslated += (_, e) =>
+    ShowDraft(e.Track, e.SegmentId, e.StableText, e.TailText);   // draw the tail dimmer
+```
+
+- The newest PARTIAL is split into sentences (`. ! ? ` and the full-width forms, closing quotes kept).
+  A sentence that has text after it and is the same in two PARTIALs in a row, ignoring case, punctuation
+  and spaces, is translated once. The result is kept per transcript under that text, so speech that a
+  forced cut moves into the next segment keeps its translation.
+- The unfinished last sentence (the tail) is translated from 3 words, and again after 2 more. The
+  newest wins. `StableText` is the translation of the finished sentences, `TailText` that of the tail.
+- The translator makes one call at a time: FINAL segments first, then stable sentences, then tails,
+  taking turns between transcripts. The `MaxWaiting` rule counts FINAL segments only.
+- A draft that covers less of the speech than the one raised before is not raised.
+- Drop the draft of a segment when its FINAL arrives (`Translated` replaces it), when the transcript
+  is cleared and after a reset. Nothing is raised for a segment once its FINAL was seen.
+- With any other translator, or more than two followed transcripts, only FINAL segments are translated
+  (`ProvisionalActive` says which).
+
+`TranscriptTranslator.Glossary` takes the user's terms for the target language, as `GlossaryEntry`
+(term, translation) values. They go with every call, and the translator uses the pairs whose term
+occurs in the text or its context. `EchoirTranslator.Translate` and `TranslateAsync` take the same
+terms as a glossary text (`TranslationGlossary.Format`) after `context`. A custom `ITextTranslator`
+needs no change: the glossary overload and `Provisional` have defaults that ignore the glossary and
+turn the drafts off.
 
 `EchoirModels.Catalogue()` lists the translators with `Backend == "translator"`, and
 `ModelCatalogue.DefaultTranslator` names the default.

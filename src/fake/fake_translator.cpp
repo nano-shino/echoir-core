@@ -10,6 +10,7 @@
 
 #include "backends/translator_backend.h"
 #include "text/env.h"
+#include "translate/glossary.h"
 #include "translate/language.h"
 
 namespace echoir::fake {
@@ -57,6 +58,13 @@ public:
         const std::size_t last = request.text.find_last_not_of(" \t\r\n");
         translate::Result result;
         result.text = "[" + request.target + "] " + request.text.substr(first, last - first + 1);
+        // The pairs of the glossary that the real translator would send, as " {term=translation}"
+        // each, so a test sees which ones were chosen.
+        const std::string line = request.text.substr(first, last - first + 1);
+        for (const translate::GlossaryEntry& entry : translate::select_glossary(
+                 translate::parse_glossary(request.glossary), line, request.context)) {
+            result.text += " {" + entry.term + "=" + entry.translation + "}";
+        }
         result.source_tokens = static_cast<int>(result.text.size());
         result.prompt_tokens = result.source_tokens + static_cast<int>(request.context.size());
         result.output_tokens = result.source_tokens;

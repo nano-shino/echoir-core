@@ -210,6 +210,9 @@ if(TARGET echoir_cli)
   add_usage_test(cli_translator_needs_translate
     "transcribe|${JFK}|--model|whisper-tiny-en|--offline|--translator|hy-mt2-7b-q4_k_m"
     "--translator requires --translate")
+  add_usage_test(cli_glossary_needs_translate
+    "transcribe|${JFK}|--model|whisper-tiny-en|--offline|--glossary-file|${CMAKE_CURRENT_SOURCE_DIR}/fixtures/glossary-fake.tsv"
+    "--glossary-file requires --translate")
   # The translator must be a translator of the registry.
   add_usage_test(cli_translator_must_be_a_translator
     "transcribe|${JFK}|--model|whisper-tiny-en|--offline|--translate|vi|--translator|whisper-tiny-en"
@@ -346,6 +349,9 @@ if(ECHOIR_FAKE_BACKEND)
     add_fake_translate_test(fake_cli_translate_stream_text
       "transcribe|${FAKE_JFK}|--model|whisper-tiny-en|--stream|--translate|ja"
       "\\[ja\\] fake")
+    add_fake_translate_test(fake_cli_translate_glossary_file
+      "transcribe|${FAKE_JFK}|--model|whisper-tiny-en|--offline|--translate|vi|--glossary-file|${CMAKE_CURRENT_SOURCE_DIR}/fixtures/glossary-fake.tsv"
+      "\\[vi\\] fake.* \\{fake=gia\\}")
     add_fake_translate_test(fake_cli_translate_offline_srt
       "transcribe|${FAKE_JFK}|--model|whisper-tiny-en|--offline|--format|srt|--translate|fr"
       "\\[fr\\] fake")

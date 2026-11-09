@@ -125,7 +125,9 @@ public sealed class ModelCatalogue
             MinVramMb: minVram,
             Present: model.GetProperty("present").GetBoolean(),
             Fits: fits,
-            Files: files.AsReadOnly());
+            Files: files.AsReadOnly(),
+            Provisional: model.TryGetProperty("provisional", out JsonElement provisional)
+                && provisional.ValueKind == JsonValueKind.True);
     }
 }
 
@@ -141,7 +143,9 @@ public sealed record DeviceInfo(
     bool IsIntegrated = false);
 
 // A catalogue entry. Present is true when every file is in the models directory with its size.
-// Fits is advisory: the core compares MinVramMb with the best device's free memory.
+// Fits is advisory: the core compares MinVramMb with the best device's free memory. Provisional is
+// true for a translator fast enough to translate the unfinished text of a segment too (see
+// TranscriptTranslator); it is false for every other entry.
 public sealed record ModelInfo(
     string Id,
     string Backend,
@@ -149,7 +153,8 @@ public sealed record ModelInfo(
     long? MinVramMb,
     bool Present,
     bool Fits,
-    IReadOnlyList<ModelFile> Files);
+    IReadOnlyList<ModelFile> Files,
+    bool Provisional = false);
 
 // One file of an entry. Size is the exact byte count the catalogue gives.
 public sealed record ModelFile(string Role, string Name, string Url, long Size, bool Present);

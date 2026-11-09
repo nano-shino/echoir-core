@@ -573,7 +573,7 @@ typedef struct {
 typedef struct {
   uint32_t    struct_size;             // sizeof(echoir_translate_request). A smaller value is
                                        // accepted if it covers every field up to target; context
-                                       // is then NULL. A larger value is refused.
+                                       // and glossary are then NULL. A larger value is refused.
   const char* text;                    // the line, UTF-8 (required, not blank)
   const char* source;                  // ISO code of its language, or "auto"; NULL or "" = "auto".
                                        // Only checked: the models find the language themselves.
@@ -584,6 +584,14 @@ typedef struct {
                                        // oldest first, separated by newlines, to help the model
                                        // with names and pronouns; NULL = none. Two lines are
                                        // enough. They are not translated.
+  const char* glossary;                // terms to translate in one way, such as names: one
+                                       // "term<TAB>translation" pair per line, the translation
+                                       // in the target language; NULL = none. Lines without a
+                                       // tab, and blank terms or translations, are ignored. The
+                                       // library keeps the pairs whose term occurs in text or
+                                       // context, ignoring case, and gives them to the model in
+                                       // its own terminology form. The whole list may be passed
+                                       // on every call. Read only if struct_size covers it.
 } echoir_translate_request;
 
 // The result of a translation. It belongs to the library, one per calling thread, and is valid

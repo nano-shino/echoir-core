@@ -410,6 +410,8 @@ const echoir_translation* echoir_translator_translate(echoir_translator* transla
             offsetof(echoir_translate_request, target) + sizeof(echoir_translate_request::target);
         constexpr size_t kEndOfContext =
             offsetof(echoir_translate_request, context) + sizeof(echoir_translate_request::context);
+        constexpr size_t kEndOfGlossary = offsetof(echoir_translate_request, glossary) +
+                                          sizeof(echoir_translate_request::glossary);
         if (translator == nullptr) {
             throw std::invalid_argument("translator must not be NULL");
         }
@@ -434,6 +436,9 @@ const echoir_translation* echoir_translator_translate(echoir_translator* transla
         in.target = request->target;
         if (request->struct_size >= kEndOfContext && request->context != nullptr) {
             in.context = request->context;
+        }
+        if (request->struct_size >= kEndOfGlossary && request->glossary != nullptr) {
+            in.glossary = request->glossary;
         }
 
         echoir::translate::Result out;

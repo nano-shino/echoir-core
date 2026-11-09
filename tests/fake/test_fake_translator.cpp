@@ -46,6 +46,24 @@ TEST_CASE("fake translator creates from the default id and translates") {
     echoir_translator_free(t);
 }
 
+TEST_CASE("fake translator keeps the glossary pairs that apply to the text or its context") {
+    echoir_translator* t = create_translator();
+    REQUIRE(t != nullptr);
+    echoir_translate_request r = request("Hello KAI.", "vi");
+    r.context = "Shin was here.";
+    r.glossary = "Kai\tKaie\nShin\tThan\nOther\tNone\nbroken line\n";
+    const echoir_translation* out = echoir_translator_translate(t, &r);
+    REQUIRE(out != nullptr);
+    CHECK(std::string(out->text) == "[vi] Hello KAI. {Kai=Kaie} {Shin=Than}");
+
+    // A request sized before the glossary field has none.
+    r.struct_size = static_cast<uint32_t>(offsetof(echoir_translate_request, glossary));
+    out = echoir_translator_translate(t, &r);
+    REQUIRE(out != nullptr);
+    CHECK(std::string(out->text) == "[vi] Hello KAI.");
+    echoir_translator_free(t);
+}
+
 TEST_CASE("fake translator takes the 7B id, and refuses ids that are not translators") {
     echoir_translator* t = create_translator("hy-mt2-7b-q4_k_m");
     REQUIRE(t != nullptr);
