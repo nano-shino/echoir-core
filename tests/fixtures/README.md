@@ -16,6 +16,7 @@ punctuation, as the scorer does.
 |---|---|---|
 | `jfk.wav` | 11.00 s | The JFK clip from whisper.cpp `samples/jfk.wav`, byte-identical to the copy at whisper.cpp v1.9.5 (commit `d1be6fde`). whisper.cpp is MIT licensed. |
 | `jfk.ref.txt` | | "And so, my fellow Americans, ask not what your country can do for you, ask what you can do for your country." |
+| `glossary-fake.tsv` | | Two `term<TAB>translation` lines for the command line tests with the scripted translator, whose transcript says "fake". |
 | `prompt_echo.wav` | 12.97 s | A recording contributed by the author. Two short lines of dialogue over background sound, which fades out from 9.5 s; nothing is said after the second line. With `--language en`, Qwen3-ASR streaming used to decode the last sound as its prompt history, repeating both lines. The converted clip still does this without the guard. |
 | `prompt_echo.ref.txt` | | "Or am I wrong? Understood, sir." The last sound is not in it. |
 | `pd_nasa_ep407.wav` | 33.31 s | An excerpt of NASA's "Houston We Have a Podcast" episode 407. American English. |

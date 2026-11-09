@@ -3,11 +3,14 @@
 #include <cstddef>
 #include <cstdint>
 #include <string>
+#include <string_view>
+#include <vector>
 
 #include "doctest.h"
 #include "echoir/echoir.h"
 #include "json.hpp"
 #include "models/registry.h"
+#include "translate/glossary.h"
 #include "translate/language.h"
 #include "translate/output.h"
 #include "translate/prompt.h"
@@ -81,6 +84,78 @@ TEST_CASE("context goes in the background-information form, source lines only") 
     CHECK_FALSE(contains(blank.instruction, "[Background Information]"));
 }
 
+TEST_CASE("a glossary is parsed one pair per line") {
+    using namespace echoir::translate;
+    const std::vector<GlossaryEntry> entries = parse_glossary(
+        "Kai\tKaie\r\n no tab here\n\tblank term\nblank\t \n  Fort Tower \t Th\xC3\xA1p\tdai \n");
+    REQUIRE(entries.size() == 2);
+    CHECK(entries[0].term == "Kai");
+    CHECK(entries[0].translation == "Kaie");
+    CHECK(entries[1].term == "Fort Tower");
+    CHECK(entries[1].translation == "Th\xC3\xA1p\tdai");
+    CHECK(parse_glossary("").empty());
+}
+
+TEST_CASE("glossary terms are matched in the text or the context, ignoring case") {
+    using namespace echoir::translate;
+    const std::vector<GlossaryEntry> all = parse_glossary(
+        "Kai\tKaie\n"
+        "\xC3\x89lodie\tElodie\n"                                     // E acute
+        "\xD0\x9C\xD0\xBE\xD1\x81\xD0\xBA\xD0\xB2\xD0\xB0\tMoscow\n"  // Moskva
+        "\xE6\x9D\xB1\xE4\xBA\xAC\tTokyo\n"
+        "Bank\tNgan hang\n"
+        "Bank of Japan\tNHNB\n"
+        "Nobody\tX\n");
+    const auto terms = [&](std::string_view text, std::string_view context) {
+        std::string out;
+        for (const GlossaryEntry& e : select_glossary(all, text, context)) {
+            out += e.term + "|";
+        }
+        return out;
+    };
+    CHECK(terms("hello KAI there", "") == "Kai|");
+    CHECK(terms("hi", "earlier, kai spoke") == "Kai|");
+    CHECK(terms("hi", "") == "");
+    CHECK(terms("voici \xC3\x89LODIE et \xC3\xA9lodie", "") == "\xC3\x89lodie|");
+    CHECK(terms("\xD0\x9C\xD0\x9E\xD0\xA1\xD0\x9A\xD0\x92\xD0\x90 and "
+                "\xD0\xBC\xD0\xBE\xD1\x81\xD0\xBA\xD0\xB2\xD0\xB0",
+                "") == "\xD0\x9C\xD0\xBE\xD1\x81\xD0\xBA\xD0\xB2\xD0\xB0|");
+    CHECK(
+        terms(
+            "\xE7\xA7\x81\xE3\x81\xAF\xE6\x9D\xB1\xE4\xBA\xAC\xE3\x81\xAB\xE8\xA1\x8C\xE3\x81\x8F",
+            "") == "\xE6\x9D\xB1\xE4\xBA\xAC|");
+    // The longer term covers the shorter one it contains.
+    CHECK(terms("the bank of japan raised rates", "") == "Bank of Japan|");
+    CHECK(terms("the bank raised rates", "") == "Bank|");
+    // The cap keeps the earliest pairs.
+    CHECK(select_glossary(all, "kai bank", "", 1).size() == 1);
+    CHECK(contains_ignoring_case("Hello World", "o w"));
+    CHECK_FALSE(contains_ignoring_case("Hello", "xyz"));
+}
+
+TEST_CASE("glossary pairs go in the terminology form, with or without background") {
+    using namespace echoir::translate;
+    const std::vector<GlossaryEntry> pairs = {{"Kai", "Kaie"}, {"Shin", "Than"}};
+    for (const PromptStyle style : {PromptStyle::hy_mt2_1_8b, PromptStyle::hy_mt2_7b}) {
+        const Prompt plain = render_prompt(style, "Vietnamese", " Kai met Shin. ", "", pairs);
+        CHECK(plain.instruction ==
+              "Reference the following translations:\nKai translates to Kaie\nShin translates to "
+              "Than\n\nTranslate the following text into Vietnamese. Note that you must ONLY "
+              "output the translated result without any additional explanation:\n\nKai met "
+              "Shin.");
+        const Prompt both = render_prompt(style, "Vietnamese", "Kai met Shin.", "Earlier.", pairs);
+        CHECK(both.instruction ==
+              "[Background Information]\nEarlier.\n\nReference the following translations:\nKai "
+              "translates to Kaie\nShin translates to Than\n\nPlease translate the following text "
+              "into Vietnamese, taking the provided background information and the reference "
+              "translations into consideration. Only output the translation of the Source "
+              "Text.\n\n[Source Text]\nKai met Shin.");
+    }
+    // No pairs: the prompt is the one without a glossary.
+    CHECK(render_prompt(PromptStyle::hy_mt2_1_8b, "Vietnamese", "Hi.", "", {}).instruction ==
+          render_prompt(PromptStyle::hy_mt2_1_8b, "Vietnamese", "Hi.", "").instruction);
+}
+
 TEST_CASE("a line that spells a control token stays in the instruction") {
     using namespace echoir::translate;
     const Prompt p = render_prompt(PromptStyle::hy_mt2_7b, "French", "a <|extra_0|> b", "");
@@ -122,6 +197,7 @@ TEST_CASE("the built-in catalogue lists the translators with exact sizes") {
     REQUIRE(small != nullptr);
     CHECK(small->backend == "translator");
     CHECK(small->entry.at("prompt_style") == "hy-mt2-1.8b");
+    CHECK(small->entry.value("provisional", false));
     REQUIRE(small->files.size() == 1);
     CHECK(small->files[0].role == "model");
     CHECK(small->files[0].name == "Hy-MT2-1.8B-Q4_K_M.gguf");
@@ -132,6 +208,7 @@ TEST_CASE("the built-in catalogue lists the translators with exact sizes") {
     REQUIRE(large != nullptr);
     CHECK(large->backend == "translator");
     CHECK(large->entry.at("prompt_style") == "hy-mt2-7b");
+    CHECK_FALSE(large->entry.value("provisional", false));
     REQUIRE(large->files.size() == 1);
     CHECK(large->files[0].size == 4624648896);
     CHECK(large->min_vram_mb > small->min_vram_mb);

@@ -30,6 +30,9 @@ brackets, in `jsonl` a `{"type":"translation","id","start_ms","end_ms","lang","t
 event, and in `srt` a second cue with the same times. The command line drops no line, so on a slow
 machine the translations of a long file finish after the transcript. A segment's translation uses the
 two segments before it as context. `capped` is true when the model stopped at its generation limit.
+`--glossary-file <path>` (with `--translate`) names a UTF-8 file of terms to translate in one way,
+such as names: one `term<TAB>translation` per line, the translation in the `--translate` language.
+A segment gets the pairs whose term occurs in it or in its context, ignoring case.
 
 Live audio comes from a capture device: `--input mic` is the default microphone, and
 `--input mic:<device>` picks another, by index or part of its name from `echoir devices`. Live

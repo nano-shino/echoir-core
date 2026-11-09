@@ -30,6 +30,23 @@ public interface ITextTranslator
         string? sourceLanguage = null,
         string? context = null,
         CancellationToken cancellationToken = default);
+
+    // As above, with a glossary: one "term<TAB>translation" pair per line, the translation in
+    // targetLanguage (see TranslationGlossary.Format). The translator uses the pairs whose term
+    // occurs in text or context. A translator written before glossaries existed ignores it.
+    Task<Translation> TranslateAsync(
+        string text,
+        string targetLanguage,
+        string? sourceLanguage,
+        string? context,
+        string? glossary,
+        CancellationToken cancellationToken)
+        => TranslateAsync(text, targetLanguage, sourceLanguage, context, cancellationToken);
+
+    // True when the translator is fast enough to translate the unfinished text of a segment as
+    // well as finished segments (TranscriptTranslator then does), as a registry entry with
+    // "provisional": true is. False by default.
+    bool Provisional => false;
 }
 
 // A loaded translation model. It is separate from the speech engine: it has its own context on the
@@ -40,14 +57,19 @@ public sealed class EchoirTranslator : ITextTranslator, IDisposable
 {
     private readonly TranslatorHandle _handle;
 
-    private EchoirTranslator(TranslatorHandle handle, string modelId)
+    private EchoirTranslator(TranslatorHandle handle, string modelId, bool provisional)
     {
         _handle = handle;
         ModelId = modelId;
+        Provisional = provisional;
     }
 
     // The registry id of the loaded model.
     public string ModelId { get; }
+
+    // True when the model's registry entry has "provisional": true, which marks a translator fast
+    // enough to translate unfinished text as well (see TranscriptTranslator).
+    public bool Provisional { get; }
 
     // Loads a translator (modelId null or empty: the catalogue's default) from modelsDir, on a
     // thread pool thread. It also runs a few short translations to warm the GPU up, so loading
@@ -74,14 +96,14 @@ public sealed class EchoirTranslator : ITextTranslator, IDisposable
     {
         ArgumentException.ThrowIfNullOrEmpty(modelsDir);
         ArgumentOutOfRangeException.ThrowIfNegative(threads);
-        (TranslatorHandle handle, string id) = await Task.Run(
+        (TranslatorHandle handle, string id, bool provisional) = await Task.Run(
             () => Create(modelId, modelsDir, registryJson, useGpu, threads), cancellationToken);
         if (cancellationToken.IsCancellationRequested)
         {
             handle.Dispose();
             cancellationToken.ThrowIfCancellationRequested();
         }
-        return new EchoirTranslator(handle, id);
+        return new EchoirTranslator(handle, id, provisional);
     }
 
     // Translates on a thread pool thread. Throws EchoirException for a language the model does not
@@ -99,12 +121,37 @@ public sealed class EchoirTranslator : ITextTranslator, IDisposable
         return Task.Run(() => Translate(text, targetLanguage, sourceLanguage, context), cancellationToken);
     }
 
+    // As above, with a glossary (see ITextTranslator).
+    public Task<Translation> TranslateAsync(
+        string text,
+        string targetLanguage,
+        string? sourceLanguage,
+        string? context,
+        string? glossary,
+        CancellationToken cancellationToken)
+    {
+        ArgumentNullException.ThrowIfNull(text);
+        ArgumentException.ThrowIfNullOrEmpty(targetLanguage);
+        return Task.Run(
+            () => Translate(text, targetLanguage, sourceLanguage, context, glossary), cancellationToken);
+    }
+
     // Translates on the calling thread. The call takes a few hundred milliseconds on a GPU.
-    public unsafe Translation Translate(
+    public Translation Translate(
         string text,
         string targetLanguage,
         string? sourceLanguage = null,
         string? context = null)
+        => Translate(text, targetLanguage, sourceLanguage, context, null);
+
+    // As above, with a glossary: "term<TAB>translation" lines for targetLanguage. The core keeps
+    // the pairs whose term occurs in text or context, ignoring case.
+    public unsafe Translation Translate(
+        string text,
+        string targetLanguage,
+        string? sourceLanguage,
+        string? context,
+        string? glossary)
     {
         ArgumentNullException.ThrowIfNull(text);
         ArgumentException.ThrowIfNullOrEmpty(targetLanguage);
@@ -113,6 +160,7 @@ public sealed class EchoirTranslator : ITextTranslator, IDisposable
         using var source = Utf8String.Create(string.IsNullOrEmpty(sourceLanguage) ? null : sourceLanguage);
         using var target = Utf8String.Create(targetLanguage);
         using var contextUtf8 = Utf8String.Create(string.IsNullOrEmpty(context) ? null : context);
+        using var glossaryUtf8 = Utf8String.Create(string.IsNullOrEmpty(glossary) ? null : glossary);
 
         TranslateRequestData request = default;
         request.StructSize = (uint)sizeof(TranslateRequestData);
@@ -120,6 +168,7 @@ public sealed class EchoirTranslator : ITextTranslator, IDisposable
         request.Source = source.Pointer;
         request.Target = target.Pointer;
         request.Context = contextUtf8.Pointer;
+        request.Glossary = glossaryUtf8.Pointer;
 
         bool added = false;
         try
@@ -171,14 +220,14 @@ public sealed class EchoirTranslator : ITextTranslator, IDisposable
     private static bool Covers(uint structSize, string field, int fieldSize)
         => structSize >= (long)Marshal.OffsetOf<TranslationData>(field) + fieldSize;
 
-    private static unsafe (TranslatorHandle Handle, string ModelId) Create(
+    private static unsafe (TranslatorHandle Handle, string ModelId, bool Provisional) Create(
         string? modelId, string modelsDir, string? registryJson, bool useGpu, int threads)
     {
         // The default id is resolved before the native create, so a failure here leaks no handle.
         string? registryText = string.IsNullOrEmpty(registryJson) ? null : registryJson;
-        string id = string.IsNullOrEmpty(modelId)
-            ? new EchoirModels(registryText).Catalogue().DefaultTranslator ?? string.Empty
-            : modelId;
+        ModelCatalogue catalogue = new EchoirModels(registryText).Catalogue();
+        string id = string.IsNullOrEmpty(modelId) ? catalogue.DefaultTranslator ?? string.Empty : modelId;
+        bool provisional = catalogue.Find(id)?.Provisional ?? false;
         using var model = Utf8String.Create(string.IsNullOrEmpty(modelId) ? null : modelId);
         using var dir = Utf8String.Create(modelsDir);
         using var registry = Utf8String.Create(registryText);
@@ -198,6 +247,6 @@ public sealed class EchoirTranslator : ITextTranslator, IDisposable
             // missing file, InvalidArgument for an unknown id or one that is not a translator.
             throw EchoirException.FromLastFailure("echoir_translator_create_from_model");
         }
-        return (new TranslatorHandle(translator), id);
+        return (new TranslatorHandle(translator), id, provisional);
     }
 }

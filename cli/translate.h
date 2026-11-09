@@ -44,8 +44,9 @@ public:
     // Called, on the worker's thread, for a segment whose translation failed.
     using ErrorSink = std::function<void(std::int64_t segment_id, const std::string& message)>;
 
+    // glossary: "term<TAB>translation" lines sent with every segment (see translate::Request).
     TranslationWorker(std::unique_ptr<translate::ITranslator> translator, std::string target,
-                      Sink sink, ErrorSink on_error);
+                      Sink sink, ErrorSink on_error, std::string glossary = {});
     ~TranslationWorker();
     TranslationWorker(const TranslationWorker&) = delete;
     TranslationWorker& operator=(const TranslationWorker&) = delete;
@@ -69,6 +70,7 @@ private:
 
     std::unique_ptr<translate::ITranslator> translator_;
     std::string target_;
+    std::string glossary_;
     Sink sink_;
     ErrorSink on_error_;
     std::mutex mutex_;

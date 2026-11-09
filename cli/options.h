@@ -53,6 +53,8 @@ struct TranscribeOptions {
     std::string translate_to;
     // The translator: a registry id. Empty takes the catalogue's default.
     std::string translator;
+    // The text of --glossary-file: "term<TAB>translation" lines for the --translate language.
+    std::string glossary;
     // Development only: "key=value" settings for the VAD. See vad::VadOverrides.
     std::vector<std::string> vad_params;
 };

@@ -8,10 +8,11 @@
 namespace echoir::translate {
 
 struct Request {
-    std::string text;     // the line to translate, UTF-8
-    std::string source;   // ISO code of the language of text, or "auto" or ""
-    std::string target;   // ISO code of the language to write
-    std::string context;  // earlier source lines, oldest first, one per line; may be empty
+    std::string text;      // the line to translate, UTF-8
+    std::string source;    // ISO code of the language of text, or "auto" or ""
+    std::string target;    // ISO code of the language to write
+    std::string context;   // earlier source lines, oldest first, one per line; may be empty
+    std::string glossary;  // "term<TAB>translation" lines for the target language; may be empty
 };
 
 struct Result {

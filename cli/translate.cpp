@@ -51,9 +51,11 @@ std::unique_ptr<translate::ITranslator> load_translator(
 }
 
 TranslationWorker::TranslationWorker(std::unique_ptr<translate::ITranslator> translator,
-                                     std::string target, Sink sink, ErrorSink on_error)
+                                     std::string target, Sink sink, ErrorSink on_error,
+                                     std::string glossary)
     : translator_(std::move(translator)),
       target_(std::move(target)),
+      glossary_(std::move(glossary)),
       sink_(std::move(sink)),
       on_error_(std::move(on_error)) {
     thread_ = std::thread([this] { run(); });
@@ -109,6 +111,7 @@ void TranslationWorker::run() {
             request.text = job.text;
             request.target = target_;
             request.context = job.context;
+            request.glossary = glossary_;
             const translate::Result result = translator_->translate(request);
             sink_(TranslatedLine{job.id, job.start_ms, job.end_ms, target_, result.text,
                                  result.capped});

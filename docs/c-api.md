@@ -141,7 +141,7 @@ The rules for an unexpected size depend on the struct:
   The fields after it take their defaults. A larger size is refused.
 - **`echoir_translator_params`:** as `echoir_model_params`.
 - **`echoir_translate_request`:** a smaller size is accepted if it covers every field up to
-  `target`; `context` is then NULL. A larger size is refused.
+  `target`; `context` and `glossary` are then NULL. A larger size is refused.
 
 ## Lifecycle
 
@@ -761,7 +761,8 @@ Returns the catalogue and the machine as JSON:
 
 `default_translator` is the id of the translator that is used when none is named; it is left out when
 the catalogue names none. An entry whose `backend` is `"translator"` is a translation model, and
-has a `prompt_style` field. It is not a speech model, so `echoir_engine_create_from_model()` refuses
+has a `prompt_style` field, and `"provisional": true` when it is fast enough to translate the
+unfinished text of a segment as well (see the binding's `TranscriptTranslator`). It is not a speech model, so `echoir_engine_create_from_model()` refuses
 its id.
 
 `registry_json` NULL selects the built-in catalogue. `models_dir` NULL or empty means no file is present.
@@ -814,6 +815,17 @@ checked. `request->context` holds the earlier lines of the same speaker in the s
 oldest first, separated by newlines; two lines are enough. They help the model with names and
 pronouns, and they are not translated. Pass source text, not translations, so that a translation
 that was late or dropped changes nothing for the lines after it.
+
+`request->glossary` holds terms that the user wants written in one way, such as names: one
+`term<TAB>translation` pair per line, the translation in the request's target language. The whole
+list of a target can be passed on every call. The library keeps the pairs whose term occurs in the
+text or the context, ignoring case (when a term holds another one, only the longer is kept, and at
+most 32 pairs are used), and gives them to the model in its terminology form: `Reference the
+following translations:` and a `term translates to translation` line for each, before the
+instruction. Lines without a tab and blank terms or translations are ignored. The model follows a
+pair most of the time but not always, and a bad pair is repeated wherever the term occurs. When
+the prompt leaves too little room for the output, the oldest context lines go first and then the
+last pairs.
 
 The call is synchronous. Calls on one translator run one at a time. The output is greedy, and each
 call is independent of the one before. The generation stops at 5 tokens per source token plus 32:

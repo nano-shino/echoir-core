@@ -6,6 +6,9 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <vector>
+
+#include "translate/glossary.h"
 
 namespace echoir::translate {
 
@@ -28,8 +31,12 @@ struct Prompt {
 };
 
 // Renders the prompt that asks for text in target_name (an English language name). A non-empty
-// context (earlier source lines) goes in the model's background-information form.
+// context (earlier source lines) goes in the model's background-information form. Glossary entries
+// (already chosen for this text, see select_glossary) go in the model's terminology form: both
+// Hy-MT2 sizes use the one of the model card, "Reference the following translations:" and a
+// "term translates to translation" line for each. With context and entries, the background block
+// comes first, then the terminology lines, then the source text.
 Prompt render_prompt(PromptStyle style, std::string_view target_name, std::string_view text,
-                     std::string_view context);
+                     std::string_view context, const std::vector<GlossaryEntry>& glossary = {});
 
 }  // namespace echoir::translate
