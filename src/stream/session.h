@@ -197,10 +197,9 @@ public:
 
     // Replaces the context of SessionConfig. Empty clears it. Throws std::invalid_argument when the
     // context is not UTF-8 or the backend refuses it (IAsrBackend::check_context), and the old
-    // context stays. A tick
-    // reads the context once when it starts, so all of its decodes use the same one, and a new
-    // context applies from the next tick. Thread-safe, also from a sink, and never waits for a
-    // decode.
+    // context stays. A tick reads the context once when it starts, so all of its decodes use the
+    // same one, and a new context applies from the next tick. Thread-safe, also from a sink, and
+    // never waits for a decode.
     void set_context(std::string context);
 
     // While muted, the audio of push() is replaced by silence of the same length after conversion,
@@ -313,8 +312,8 @@ private:
     // Lock order: lifecycle_mu_, decode_mu_, worker_mu_, then audio_mu_ or text_mu_. audio_mu_ and
     // text_mu_ are never held together. worker_mu_ is never held across a decode. The store's own
     // lock is taken last, under audio_mu_ or alone. A turn of gate_ is taken under decode_mu_ with
-    // no other lock held, and no lock is taken during a turn. context_mu_ is held only to copy or
-    // replace context_, with no other lock.
+    // no other lock held, and no lock is taken during a turn. context_mu_ is taken last, alone or
+    // under decode_mu_, and held only to copy or replace context_.
     std::mutex lifecycle_mu_;  // start and stop, so the worker handle is changed by one caller
     std::mutex decode_mu_;     // held for a whole tick by process, flush, reset and the worker
     std::mutex audio_mu_;      // pending_ and resampler_; push holds it only while converting
