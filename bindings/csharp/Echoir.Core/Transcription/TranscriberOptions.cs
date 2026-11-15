@@ -45,8 +45,8 @@ public sealed record TranscriberOptions
     // Text that every decode gets ahead of the run's own recent lines: the names, places and terms
     // the audio is likely to hold, so the model spells them right (echoir_session_set_context).
     // Null or empty: none. Whisper holds about 160 English words of it, Qwen3-ASR 512 tokens; Start
-    // throws an EchoirException (InvalidArgument) for a context over the limit. The model can write
-    // context terms that were not said, so keep it to what is likely to be said.
+    // throws an EchoirException (InvalidArgument) for a context over the limit. A context also changes
+    // the decoding of speech that names none of its terms, so keep it to what is likely to be said.
     // EchoirTranscriber.SetContext changes it while running.
     public string? Context { get; init; }
 

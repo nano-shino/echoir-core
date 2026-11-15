@@ -475,8 +475,9 @@ A context over the limit, or one that is not UTF-8, returns `ECHOIR_ERR_INVALID_
 driving mode. A decode tick reads the context when it starts, so a tick that runs keeps the old one and
 the new one applies from the next tick.
 
-A decoder can write context terms that the audio does not hold, most often over silence, music or
-speech in another language. Keep the context to what is likely to be said.
+A context also changes how speech that holds none of its terms is decoded, and on Whisper that can
+cost accuracy. Keep the context to what is likely to be said, and clear it when the audio moves on to
+something else.
 
 ### Audio store, level envelope and input mute
 

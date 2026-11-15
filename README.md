@@ -234,7 +234,7 @@ present.
 the names and terms of what is being transcribed, so the model spells them right;
 `SetContext(text)` changes it while the transcriber runs. Whisper takes about 160 English words of
 context, Qwen3-ASR 512 tokens, and a longer one throws an `EchoirException`. Keep it to what is likely
-to be said: a model can write context terms the audio does not hold.
+to be said: a context also changes the decoding of speech that names none of its terms.
 
 To keep the audio of every run, create an `EchoirTape` and pass it in `TranscriberOptions.Tape`.
 Each run then writes its track (`mic`, `system` or `TapeTrack`) after the previous one, and
