@@ -107,6 +107,33 @@ TEST_CASE("live: push returns while a decode is blocked") {
     session.stop();
 }
 
+TEST_CASE("live: set_context returns while a decode is blocked") {
+    ts::LiveBackend backend;
+    ts::LiveVad vad;
+    ts::EventLog log;
+    std::atomic<bool> gate{false};
+    // As above: the gate opens on its own, so a call that waits fails the timing check.
+    backend.before_decode = [&gate] {
+        for (int i = 0; i < 5000 && !gate.load(); ++i) {
+            std::this_thread::sleep_for(1ms);
+        }
+    };
+    echoir::Session session(backend, vad, SessionConfig{},
+                            [&log](const SessionEvent& ev) { log.add(ev); });
+    std::size_t phase = 0;
+    session.start();
+    session.push(audio(1000, true, phase), 16000, 1);
+    REQUIRE(ts::wait_for([&backend] { return backend.decodes.load() == 1; }));
+
+    const auto began = std::chrono::steady_clock::now();
+    session.set_context("Zorvath, Quimby");
+    session.set_context("");
+    CHECK(std::chrono::steady_clock::now() - began < 1s);
+
+    gate = true;
+    session.stop();
+}
+
 TEST_CASE("live: lag grows while a decode is blocked, and is read without waiting for it") {
     ts::LiveBackend backend;
     ts::LiveVad vad;

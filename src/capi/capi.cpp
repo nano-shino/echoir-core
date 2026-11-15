@@ -911,6 +911,12 @@ echoir_status echoir_session_set_input_muted(echoir_session* s, int32_t muted) {
     });
 }
 
+echoir_status echoir_session_set_context(echoir_session* s, const char* context) {
+    return run_session_call(s, "echoir_session_set_context", [context](echoir::Session& session) {
+        session.set_context(context != nullptr ? std::string(context) : std::string());
+    });
+}
+
 echoir_status echoir_session_read_lag(echoir_session* s, echoir_lag* out) {
     const char* fn = "echoir_session_read_lag";
     if (out == nullptr) {
@@ -1016,6 +1022,10 @@ echoir_status echoir_session_read_peaks(echoir_session*, int64_t, int64_t, int32
 
 echoir_status echoir_session_set_input_muted(echoir_session*, int32_t) {
     return not_built("echoir_session_set_input_muted");
+}
+
+echoir_status echoir_session_set_context(echoir_session*, const char*) {
+    return not_built("echoir_session_set_context");
 }
 
 echoir_status echoir_session_read_lag(echoir_session*, echoir_lag*) {

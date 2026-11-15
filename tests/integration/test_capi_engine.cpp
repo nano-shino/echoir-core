@@ -191,6 +191,38 @@ TEST_CASE("session create takes stream_policy by struct_size, and refuses rollba
     echoir_engine_free(engine);
 }
 
+TEST_CASE("session set_context checks the context against the Whisper prompt limit") {
+    const auto model = echoir::test::model_file("whisper-tiny-en");
+    ECHOIR_REQUIRE_OR_SKIP(model, "whisper-tiny-en model (models/ggml-tiny.en.bin)");
+    const auto vad = echoir::test::model_file("silero-v6.2.0", "vad");
+    ECHOIR_REQUIRE_OR_SKIP(vad, "silero-v6.2.0 (vad) model");
+
+    const std::string model_path = model->string();
+    const std::string vad_path = vad->string();
+    echoir_engine_params params = engine_params(model_path.c_str(), vad_path.c_str());
+    echoir_engine* engine = echoir_engine_create(&params);
+    REQUIRE(engine != nullptr);
+    echoir_session_params sp{};
+    echoir_session_params_init(&sp);
+    echoir_session* session = echoir_session_create(engine, &sp, nullptr, nullptr);
+    REQUIRE(session != nullptr);
+
+    CHECK(echoir_session_set_context(session, "Vocabulary: Kennedy, Americans.") == ECHOIR_OK);
+    // Each word is at least one token, so 300 of them are over the 223-token prompt.
+    std::string too_long;
+    for (int i = 0; i < 300; ++i) {
+        too_long += "Kennedy ";
+    }
+    CHECK(echoir_session_set_context(session, too_long.c_str()) == ECHOIR_ERR_INVALID_ARG);
+    CHECK(echoir_last_status() == ECHOIR_ERR_INVALID_ARG);
+    CHECK(last_error_contains("echoir_session_set_context"));
+    CHECK(last_error_contains("223"));
+    CHECK(echoir_session_set_context(session, nullptr) == ECHOIR_OK);
+
+    echoir_session_free(session);
+    echoir_engine_free(engine);
+}
+
 TEST_CASE("freeing NULL is a no-op") {
     echoir_engine_free(nullptr);
     echoir_session_free(nullptr);

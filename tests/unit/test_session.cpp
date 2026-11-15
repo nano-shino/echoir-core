@@ -15,6 +15,7 @@
 #include <span>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -62,6 +63,8 @@ public:
     std::function<void(std::int64_t, std::int64_t)> before_return;
     std::vector<Call> calls;
     bool cut_history = false;  // history_at_cut()
+    // check_context() refuses a context longer than this many bytes.
+    std::size_t max_context = std::numeric_limits<std::size_t>::max();
 
     echoir::DecodeResult decode(const echoir::DecodeRequest& request) override {
         if (request.pcm.empty()) {
@@ -79,6 +82,11 @@ public:
 
     std::string name() const override { return "fake"; }
     bool history_at_cut() const override { return cut_history; }
+    void check_context(std::string_view context) const override {
+        if (context.size() > max_context) {
+            throw std::invalid_argument("context is too long");
+        }
+    }
 
     static std::string span_text(std::int64_t start, std::int64_t end) {
         return "[" + std::to_string(start) + "," + std::to_string(end) + ")";
@@ -730,6 +738,87 @@ TEST_CASE("session: the configured context goes with every decode") {
     for (const FakeBackend::Call& call : rig.backend.calls) {
         CHECK(call.context == "Vocabulary: Zorvath, Quimby");
     }
+}
+
+TEST_CASE("session: set_context changes the context from the next tick, and empty clears it") {
+    Rig rig;
+    rig.vad.speech = {{0, 400000}};
+    rig.push_ms(1000);
+    rig.session().process();
+    rig.session().set_context("Names: Zorvath");
+    rig.push_ms(1000);
+    rig.session().process();
+    rig.session().set_context("");
+    rig.push_ms(1000);
+    rig.session().process();
+    REQUIRE(rig.backend.calls.size() == 3);
+    CHECK(rig.backend.calls[0].context.empty());
+    CHECK(rig.backend.calls[1].context == "Names: Zorvath");
+    CHECK(rig.backend.calls[2].context.empty());
+}
+
+TEST_CASE("session: a context the backend refuses is an error, and the old context stays") {
+    Rig rig;
+    rig.backend.max_context = 8;
+    rig.vad.speech = {{0, 400000}};
+    rig.session().set_context("Quimby");
+    CHECK_THROWS_AS(rig.session().set_context("Quimby, Zorvath"), std::invalid_argument);
+    // Bytes that are not UTF-8 are refused before the backend sees them.
+    CHECK_THROWS_AS(rig.session().set_context("Qu\xff"), std::invalid_argument);
+    rig.push_ms(1000);
+    rig.session().process();
+    REQUIRE(rig.backend.calls.size() == 1);
+    CHECK(rig.backend.calls[0].context == "Quimby");
+}
+
+TEST_CASE("session: a configured context that does not fit fails the constructor") {
+    FakeBackend backend;
+    backend.max_context = 4;
+    FakeVad vad;
+    const auto sink = [](const SessionEvent&) {};
+    SessionConfig config;
+    config.context = "too long";
+    CHECK_THROWS_AS(echoir::Session(backend, vad, config, sink), std::invalid_argument);
+    config.context = "\xc3";  // a lead byte with no continuation
+    backend.max_context = 100;
+    CHECK_THROWS_AS(echoir::Session(backend, vad, config, sink), std::invalid_argument);
+}
+
+TEST_CASE("session: a context set during a tick waits for the next tick, retry included") {
+    Rig rig;
+    rig.vad.speech = {{8000, 40000}, {56000, 88000}};
+    // The second segment decodes to the first one's text, so it is decoded again without history.
+    rig.backend.text_for = [](std::int64_t start, std::int64_t end) {
+        return start == 56000 ? FakeBackend::span_text(8000, 40000)
+                              : FakeBackend::span_text(start, end);
+    };
+    bool set = false;
+    rig.backend.before_return = [&](std::int64_t start, std::int64_t) {
+        if (start == 56000 && !set) {
+            set = true;
+            rig.session().set_context("new");
+        }
+    };
+    rig.session().set_context("old");
+    rig.push_ms(3000);
+    rig.session().process();
+    // This tick finalizes the first segment and decodes the second twice: with history, which
+    // echoes it, and again without. The context changes during its first decode of the second.
+    rig.push_ms(2000);
+    rig.session().process();
+    REQUIRE(set);
+    const std::size_t before = rig.backend.calls.size();
+    rig.push_ms(4000);
+    rig.session().process();
+    REQUIRE(rig.backend.calls.size() > before);
+
+    bool retried = false;
+    for (std::size_t i = 0; i < rig.backend.calls.size(); ++i) {
+        const FakeBackend::Call& call = rig.backend.calls[i];
+        CHECK(call.context == (i < before ? "old" : "new"));
+        retried = retried || (i < before && call.start == 56000 && call.history.empty());
+    }
+    CHECK(retried);
 }
 
 TEST_CASE("session: a sink that throws does not stop the session") {

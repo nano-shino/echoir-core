@@ -261,6 +261,23 @@ public sealed class EchoirTranscriber : IDisposable, IAsyncDisposable
         }
     }
 
+    // Changes the context of the running session (TranscriberOptions.Context) from its next
+    // decode; null or empty clears it. Never waits for a decode. Throws an EchoirException
+    // (InvalidArgument) for a context over the model's limit, and the previous context stays. Does
+    // nothing while not running: the next Start takes TranscriberOptions.Context.
+    public void SetContext(string? context)
+    {
+        ObjectDisposedException.ThrowIf(_disposed, this);
+        lock (_native)
+        {
+            if (!_running || _session is null)
+            {
+                return;
+            }
+            SetSessionContext(_session, context);
+        }
+    }
+
     // The audio devices of this machine. Does not need a loaded model.
     public static AudioDevices Devices()
     {
@@ -1027,7 +1044,30 @@ public sealed class EchoirTranscriber : IDisposable, IAsyncDisposable
         {
             throw EchoirException.FromLastFailure("echoir_session_create");
         }
-        return new SessionHandle(engine, session);
+        var handle = new SessionHandle(engine, session);
+        if (!string.IsNullOrEmpty(options.Context))
+        {
+            try
+            {
+                SetSessionContext(handle, options.Context);
+            }
+            catch
+            {
+                handle.Dispose();
+                throw;
+            }
+        }
+        return handle;
+    }
+
+    // The native call returns at once: it checks the text against the model's tokenizer and
+    // stores it for the next decode, so holding _native here never stalls event delivery.
+    private static void SetSessionContext(SessionHandle session, string? context)
+    {
+        using var text = Utf8String.Create(string.IsNullOrEmpty(context) ? null : context);
+        EchoirException.ThrowIfFailed(
+            NativeMethods.SessionSetContext(session.DangerousGetHandle(), text.Pointer),
+            "echoir_session_set_context");
     }
 
     // Transcribes 16 kHz mono samples on the loaded model, apart from the live transcript: a

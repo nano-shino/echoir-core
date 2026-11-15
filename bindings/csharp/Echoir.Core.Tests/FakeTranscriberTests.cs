@@ -270,6 +270,22 @@ public sealed class FakeTranscriberTests
     }
 
     [TestMethod]
+    public async Task TheContextIsTakenAtStartAndChangedWhileRunning()
+    {
+        await using var transcriber = await LoadAsync();
+        // Not running: nothing to change, and no error.
+        transcriber.SetContext("Zorvath");
+
+        transcriber.Start(AudioSource.Push, options: new TranscriberOptions { Context = "Names: Zorvath, Quimby" });
+        PushSeconds(transcriber, 2);
+        transcriber.SetContext("Names: Quimby");
+        PushSeconds(transcriber, 2);
+        transcriber.SetContext(null);
+        Wait.Until(() => transcriber.Transcript.Finals.Count > 0, "a FINAL");
+        await transcriber.StopAsync();
+    }
+
+    [TestMethod]
     public void StartWithoutAModelIsRejected()
     {
         using var transcriber = new EchoirTranscriber();

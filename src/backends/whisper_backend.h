@@ -2,6 +2,7 @@
 #pragma once
 
 #include <string>
+#include <string_view>
 
 #include "backends/asr_backend.h"
 
@@ -22,6 +23,9 @@ public:
 
     DecodeResult decode(const DecodeRequest& request) override;
     std::string name() const override;
+    // Throws std::invalid_argument for a context longer than the whole prompt (223 tokens on
+    // the models in the registry).
+    void check_context(std::string_view context) const override;
 
 private:
     whisper_context* ctx_ = nullptr;

@@ -4,6 +4,7 @@
 
 #include <memory>
 #include <string>
+#include <string_view>
 
 #include "backends/asr_backend.h"
 
@@ -34,6 +35,9 @@ public:
     // not fit in the context with the window and generation.
     DecodeResult decode(const DecodeRequest& request) override;
     std::string name() const override;
+    // Throws std::invalid_argument for a context over 512 tokens or one containing the media
+    // marker.
+    void check_context(std::string_view context) const override;
     bool supports_prefix() const override { return true; }
     bool history_at_cut() const override { return true; }
 

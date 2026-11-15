@@ -57,6 +57,8 @@ int main(void) {
         EXPECT(echoir_session_read_audio(NULL, 0, 10, NULL, 0, &n) == NULL_SESSION_STATUS);
         EXPECT(echoir_session_read_peaks(NULL, 0, 10, 10, NULL, 0, &n) == NULL_SESSION_STATUS);
         EXPECT(echoir_session_set_input_muted(NULL, 1) == NULL_SESSION_STATUS);
+        EXPECT(echoir_session_set_context(NULL, "Zorvath") == NULL_SESSION_STATUS);
+        EXPECT(echoir_session_set_context(NULL, NULL) == NULL_SESSION_STATUS);
     }
     {
         echoir_lag lag;

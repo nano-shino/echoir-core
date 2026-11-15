@@ -42,6 +42,14 @@ public sealed record TranscriberOptions
 
     public StreamPolicy Policy { get; init; } = StreamPolicy.Default;
 
+    // Text that every decode gets ahead of the run's own recent lines: the names, places and terms
+    // the audio is likely to hold, so the model spells them right (echoir_session_set_context).
+    // Null or empty: none. Whisper holds about 160 English words of it, Qwen3-ASR 512 tokens; Start
+    // throws an EchoirException (InvalidArgument) for a context over the limit. A context also changes
+    // the decoding of speech that names none of its terms, so keep it to what is likely to be said.
+    // EchoirTranscriber.SetContext changes it while running.
+    public string? Context { get; init; }
+
     // How much of the newest audio the session keeps for TryReadAudio, as 16 kHz mono (about
     // 1.9 MB a minute). Zero keeps none. The level envelope behind ReadPeaks and Level is kept
     // either way. Ignored when Tape is set.

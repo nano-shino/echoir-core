@@ -209,6 +209,32 @@ TEST_CASE("fake session keeps its audio, its envelope and the mute through the C
     echoir_engine_free(engine);
 }
 
+TEST_CASE("fake session takes a context through the C ABI, and refuses one that is not UTF-8") {
+    echoir_engine* engine = create_engine();
+    REQUIRE(engine != nullptr);
+    echoir_session_params params{};
+    echoir_session_params_init(&params);
+    echoir_session* session = echoir_session_create(engine, &params, nullptr, nullptr);
+    REQUIRE(session != nullptr);
+
+    CHECK(echoir_session_set_context(session, "Names: Zorvath, Quimby") == ECHOIR_OK);
+    CHECK(echoir_session_set_context(session, "\xff\xfe") == ECHOIR_ERR_INVALID_ARG);
+    CHECK(echoir_last_status() == ECHOIR_ERR_INVALID_ARG);
+    CHECK(std::string(echoir_last_error()).find("echoir_session_set_context") != std::string::npos);
+    CHECK(echoir_session_set_context(session, nullptr) == ECHOIR_OK);
+    CHECK(echoir_session_set_context(session, "") == ECHOIR_OK);
+
+    // Changing it while the worker decodes is allowed.
+    REQUIRE(echoir_session_start(session) == ECHOIR_OK);
+    const std::vector<float> pcm = speech(10 * kBlock);
+    REQUIRE(echoir_session_push_f32(session, pcm.data(), pcm.size(), kSampleRate, 1) == ECHOIR_OK);
+    CHECK(echoir_session_set_context(session, "Zorvath") == ECHOIR_OK);
+    REQUIRE(echoir_session_stop(session) == ECHOIR_OK);
+
+    echoir_session_free(session);
+    echoir_engine_free(engine);
+}
+
 TEST_CASE("fake session without retain_audio_ms keeps no audio") {
     echoir_engine* engine = create_engine();
     REQUIRE(engine != nullptr);

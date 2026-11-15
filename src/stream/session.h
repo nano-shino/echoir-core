@@ -47,6 +47,7 @@
 #include <optional>
 #include <span>
 #include <string>
+#include <string_view>
 #include <thread>
 #include <vector>
 
@@ -74,8 +75,10 @@ enum class StreamPolicy {
 
 // Settings of a session. Times are milliseconds; the session converts them to samples.
 struct SessionConfig {
-    std::string language = "auto";        // passed to the backend; "auto" or "" lets it detect
-    std::string context;                  // user text sent with every decode, ahead of the history
+    std::string language = "auto";  // passed to the backend; "auto" or "" lets it detect
+    // User text sent with every decode, ahead of the history, such as names and terms the speech
+    // is likely to hold. Empty for none. set_context() replaces it while the session runs.
+    std::string context;
     std::int64_t min_chunk_ms = 500;      // a tick runs once more than this much audio is pending
     std::int64_t max_segment_ms = 10000;  // a segment is cut when it reaches this length
     bool emit_partials = true;            // false: no PARTIAL events
@@ -127,10 +130,11 @@ public:
     // Throws std::invalid_argument if min_chunk_ms is negative, if max_segment_ms is below 200 (the
     // quietest-point search needs room for a 100 ms block), if unfixed_decodes or rollback_tokens
     // is negative, if retain_audio_ms is negative, if the policy is rollback and the backend has no
-    // prefix support, if sink is empty, or if a tape is given with a bad track name. Throws
-    // StateError when the tape is closed or its track already has a writer.
-    // Sessions that share backend and vad must share gate too. A null gate gives the session a gate
-    // of its own, for a backend and a VAD that only this session uses.
+    // prefix support, if the context is not UTF-8 or the backend refuses it
+    // (IAsrBackend::check_context), if sink is empty, or if a tape is given with a bad track name.
+    // Throws StateError when the tape is closed or its track already has a writer. Sessions that
+    // share backend and vad must share gate too. A null gate gives the session a gate of its own,
+    // for a backend and a VAD that only this session uses.
     Session(IAsrBackend& backend, vad::IVad& vad, SessionConfig config, SessionSink sink,
             std::shared_ptr<stream::EngineGate> gate = nullptr);
     // Stops the worker, if one runs. Destroying the session from its own sink aborts the process:
@@ -190,6 +194,13 @@ public:
     // Without a tape it does nothing. Audio pushed before the call goes before the seam.
     // Thread-safe, like push().
     void mark_seam();
+
+    // Replaces the context of SessionConfig. Empty clears it. Throws std::invalid_argument when the
+    // context is not UTF-8 or the backend refuses it (IAsrBackend::check_context), and the old
+    // context stays. A tick reads the context once when it starts, so all of its decodes use the
+    // same one, and a new context applies from the next tick. Thread-safe, also from a sink, and
+    // never waits for a decode.
+    void set_context(std::string context);
 
     // While muted, the audio of push() is replaced by silence of the same length after conversion,
     // so the VAD ends the ongoing segment and timestamps keep running. Thread-safe.
@@ -259,9 +270,10 @@ private:
     // exception is a forced cut, which returns the cut: the remainder still needs a decode.
     // speech_samples is increased by the length of the speech ranges that were decoded, and
     // wait_ms by the time spent waiting for the gate.
+    // context is the user context of this tick.
     std::size_t analyze(const std::vector<float>& window, bool finish, std::int64_t origin,
-                        State& st, std::vector<SessionEvent>& events, std::int64_t& speech_samples,
-                        double& wait_ms);
+                        const std::string& context, State& st, std::vector<SessionEvent>& events,
+                        std::int64_t& speech_samples, double& wait_ms);
     // Sends the events in order, skipping text from before the generation was bumped by clear().
     void deliver(const std::vector<SessionEvent>& events, std::uint64_t generation);
     void emit_locked(const SessionEvent& event);
@@ -273,6 +285,8 @@ private:
     // Throws StateError when the calling thread is inside a sink of this session. The call would
     // otherwise wait on a lock that the sink's own call still holds.
     void refuse_from_sink(const char* call) const;
+    // Throws std::invalid_argument for a context that is not UTF-8 or that the backend refuses.
+    void check_context(std::string_view context) const;
     void drain_resampler();
     // Mutes and stores the samples that a conversion appended to pending_ from index `from`.
     // Caller holds audio_mu_.
@@ -298,13 +312,19 @@ private:
     // Lock order: lifecycle_mu_, decode_mu_, worker_mu_, then audio_mu_ or text_mu_. audio_mu_ and
     // text_mu_ are never held together. worker_mu_ is never held across a decode. The store's own
     // lock is taken last, under audio_mu_ or alone. A turn of gate_ is taken under decode_mu_ with
-    // no other lock held, and no lock is taken during a turn.
+    // no other lock held, and no lock is taken during a turn. context_mu_ is taken last, alone or
+    // under decode_mu_, and held only to copy or replace context_.
     std::mutex lifecycle_mu_;  // start and stop, so the worker handle is changed by one caller
     std::mutex decode_mu_;     // held for a whole tick by process, flush, reset and the worker
     std::mutex audio_mu_;      // pending_ and resampler_; push holds it only while converting
     std::mutex text_mu_;       // generation_, and every sink call
     std::mutex worker_mu_;     // the worker's wake-up state; push takes it to wake the worker
     std::condition_variable worker_cv_;
+    std::mutex context_mu_;  // context_
+
+    // The user context. A tick copies it when it starts; config_.context is not used after the
+    // constructor.
+    std::string context_;  // context_mu_
 
     std::optional<audio::Resampler> resampler_;  // audio_mu_
     std::int32_t rate_ = 0;                      // audio_mu_: format of resampler_

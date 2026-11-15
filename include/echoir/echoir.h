@@ -311,6 +311,19 @@ ECHOIR_API echoir_status  echoir_session_read_peaks(echoir_session*, int64_t sta
 // silence. muted 0 resumes. Takes effect from the next audio the session converts.
 ECHOIR_API echoir_status  echoir_session_set_input_muted(echoir_session*, int32_t muted);
 
+// Sets the session's context: UTF-8 text that every decode gets ahead of the session's own recent
+// lines, such as the names, places and terms the audio is likely to hold, so the decoder spells
+// them right. NULL or "" clears it (the default). The text is read during this call only. On
+// Whisper the context and the recent lines share a prompt of 223 tokens (about 160 English words),
+// and recent lines are left out first, so the context may take all of it. On Qwen3-ASR the context
+// holds up to 512 tokens, apart from the recent lines. A context over the limit, not UTF-8, or
+// (Qwen3-ASR) holding its media marker returns ECHOIR_ERR_INVALID_ARG with the reason in
+// echoir_last_error(), and the previous context stays. A context also changes the decoding of
+// speech that holds none of its terms, which can cost accuracy, so keep it to what is likely said.
+// Takes effect from the next decode tick: a tick that runs keeps the context it started with.
+// Thread-safe, in either driving mode, and never waits for a decode.
+ECHOIR_API echoir_status  echoir_session_set_context(echoir_session*, const char* context);
+
 // How far the decoding is behind the audio the session took in, in ms on the session timeline.
 // backlog_ms is head_ms - decoded_ms: the audio waiting for a tick plus the new audio of the tick
 // that runs. While a session keeps up it stays near min_chunk_ms plus one decode; when it grows

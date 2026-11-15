@@ -102,20 +102,17 @@ int token_count(whisper_context* ctx, const std::string& text) {
     return whisper_tokenize(ctx, text.c_str(), tokens.data(), static_cast<int>(tokens.size()));
 }
 
+// The most tokens the initial prompt may have: half the text positions, less one, the same limit
+// whisper.cpp applies to the prompt.
+int prompt_limit(whisper_context* ctx) { return whisper_n_text_ctx(ctx) / 2 - 1; }
+
 // The initial prompt: the context, then each history entry as " " + text. Whisper keeps the tail
 // of an over-long prompt, which would cut the start of the context. So the oldest history entries
-// go first, and a context that is too long by itself is an error.
+// go first. The caller has checked that the context fits by itself.
 std::string build_prompt(whisper_context* ctx, std::string_view context,
                          const std::vector<std::string>& history) {
-    // Half the text positions, less one: the same limit whisper.cpp applies to the prompt.
-    const int limit = whisper_n_text_ctx(ctx) / 2 - 1;
+    const int limit = prompt_limit(ctx);
     const std::string head(context);
-    const int head_tokens = token_count(ctx, head);
-    if (head_tokens > limit) {
-        throw std::invalid_argument("context is " + std::to_string(head_tokens) +
-                                    " tokens; the Whisper prompt holds at most " +
-                                    std::to_string(limit));
-    }
     for (std::size_t first = 0; first < history.size(); ++first) {
         std::string prompt = head;
         for (std::size_t i = first; i < history.size(); ++i) {
@@ -194,7 +191,8 @@ DecodeResult WhisperBackend::decode(const DecodeRequest& request) {
         }
     }
 
-    // The prompt is checked before the empty-input return, so a bad context fails on every call.
+    // The context is checked before the empty-input return, so a bad context fails on every call.
+    check_context(request.context);
     const std::string prompt = build_prompt(ctx_, request.context, request.history);
 
     // Nothing to decode, so don't call into whisper at all.
@@ -237,5 +235,16 @@ DecodeResult WhisperBackend::decode(const DecodeRequest& request) {
 }
 
 std::string WhisperBackend::name() const { return "whisper"; }
+
+void WhisperBackend::check_context(std::string_view context) const {
+    // whisper_tokenize only reads the vocabulary, so this is safe beside a running decode.
+    const int tokens = token_count(ctx_, std::string(context));
+    const int limit = prompt_limit(ctx_);
+    if (tokens > limit) {
+        throw std::invalid_argument("context is " + std::to_string(tokens) +
+                                    " tokens; the Whisper prompt holds at most " +
+                                    std::to_string(limit));
+    }
+}
 
 }  // namespace echoir
