@@ -296,19 +296,8 @@ DecodeResult QwenBackend::decode(const DecodeRequest& request) {
         throw std::invalid_argument("window is longer than " + std::to_string(kMaxWindowSeconds) +
                                     " s");
     }
-    // The media marker in the text would be read as a second audio slot, and the tokenizer would
-    // then fail with a message that does not name the context.
-    if (request.context.find(mtmd_default_marker()) != std::string_view::npos) {
-        throw std::invalid_argument("context must not contain " +
-                                    std::string(mtmd_default_marker()));
-    }
+    check_context(request.context);
     const llama_vocab* vocab = llama_model_get_vocab(model_.get());
-    const std::size_t context_count = tokenize_text(vocab, request.context).size();
-    if (context_count > static_cast<std::size_t>(kContextTokens)) {
-        throw std::invalid_argument("context is " + std::to_string(context_count) +
-                                    " tokens; the Qwen3-ASR context holds at most " +
-                                    std::to_string(kContextTokens));
-    }
     if (request.prefix.find(mtmd_default_marker()) != std::string_view::npos) {
         throw std::invalid_argument("prefix must not contain " +
                                     std::string(mtmd_default_marker()));
@@ -402,5 +391,21 @@ DecodeResult QwenBackend::decode(const DecodeRequest& request) {
 }
 
 std::string QwenBackend::name() const { return "qwen3-asr"; }
+
+void QwenBackend::check_context(std::string_view context) const {
+    // The media marker in the text would be read as a second audio slot, and the tokenizer would
+    // then fail with a message that does not name the context.
+    if (context.find(mtmd_default_marker()) != std::string_view::npos) {
+        throw std::invalid_argument("context must not contain " +
+                                    std::string(mtmd_default_marker()));
+    }
+    // Tokenizing only reads the vocabulary, so this is safe beside a running decode.
+    const std::size_t count = tokenize_text(llama_model_get_vocab(model_.get()), context).size();
+    if (count > static_cast<std::size_t>(kContextTokens)) {
+        throw std::invalid_argument("context is " + std::to_string(count) +
+                                    " tokens; the Qwen3-ASR context holds at most " +
+                                    std::to_string(kContextTokens));
+    }
+}
 
 }  // namespace echoir

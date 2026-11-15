@@ -230,6 +230,12 @@ For audio the host has, use `AudioSource.Push` and call `Push(samples, sampleRat
 the samples. `EchoirModels.Catalogue(modelsDir)` lists the models and whether their files are
 present.
 
+`TranscriberOptions.Context` gives every decode text ahead of the run's own recent lines, such as
+the names and terms of what is being transcribed, so the model spells them right;
+`SetContext(text)` changes it while the transcriber runs. Whisper takes about 160 English words of
+context, Qwen3-ASR 512 tokens, and a longer one throws an `EchoirException`. Keep it to what is likely
+to be said: a model can write context terms the audio does not hold.
+
 To keep the audio of every run, create an `EchoirTape` and pass it in `TranscriberOptions.Tape`.
 Each run then writes its track (`mic`, `system` or `TapeTrack`) after the previous one, and
 `tape.TryReadAudio(track, startMs, endMs, out samples)` reads any range back, whatever run or model

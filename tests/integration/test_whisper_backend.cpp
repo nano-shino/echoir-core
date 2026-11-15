@@ -11,6 +11,7 @@
 #include <stdexcept>
 #include <string>
 #include <system_error>
+#include <thread>
 #include <vector>
 
 #ifndef _WIN32
@@ -271,6 +272,43 @@ TEST_CASE("WhisperBackend rejects a context over the prompt limit") {
     const std::vector<std::string> no_history;
     CHECK_THROWS_AS(backend->decode({std::span<const float>(silence), no_history, "auto", context}),
                     std::invalid_argument);
+}
+
+TEST_CASE("WhisperBackend checks a context while a decode runs on another thread") {
+    const auto model = echoir::test::model_file("whisper-tiny-en");
+    ECHOIR_REQUIRE_OR_SKIP(model, "whisper-tiny-en model (models/ggml-tiny.en.bin)");
+    const auto wav = echoir::test::fixture("jfk");
+    ECHOIR_REQUIRE_OR_SKIP(wav, "jfk.wav fixture");
+
+    const echoir::audio::PcmBuffer buffer = echoir::audio::read_wav(*wav);
+    const std::vector<float> mono =
+        echoir::audio::to_mono_16k(buffer.samples, buffer.rate, buffer.channels);
+    const std::string model_path = model->string();
+    const auto backend = echoir::make_backend(whisper_params(model_path.c_str()));
+    std::string too_long;
+    for (int i = 0; i < 300; ++i) {
+        too_long += "Kennedy ";
+    }
+
+    // A host checks a new context while the session decodes, without waiting for the decode.
+    std::string text;
+    std::thread decoder([&] {
+        const std::vector<std::string> no_history;
+        text = backend->decode({std::span<const float>(mono), no_history, "auto"}).text;
+    });
+    int refused = 0;
+    for (int i = 0; i < 50; ++i) {
+        CHECK_NOTHROW(backend->check_context("Vocabulary: Kennedy, Americans."));
+        try {
+            backend->check_context(too_long);
+        } catch (const std::invalid_argument&) {
+            ++refused;
+        }
+    }
+    decoder.join();
+    CHECK(refused == 50);
+    CHECK(lower(text).find("ask not what your country") != std::string::npos);
+    CHECK_NOTHROW(backend->check_context(""));
 }
 
 TEST_CASE("WhisperBackend rejects a language the model does not have") {

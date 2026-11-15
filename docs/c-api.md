@@ -91,8 +91,8 @@ the JSON text that the library returns.
 - A handle (engine or session) is used by one thread at a time. Sessions of one engine are separate
   handles, so each may be driven on its own thread.
 - `echoir_session_push_f32()`, `echoir_session_push_s16()`, `echoir_session_read_audio()`,
-  `echoir_session_read_peaks()`, `echoir_session_set_input_muted()` and `echoir_session_read_lag()`
-  are thread-safe. They can run on any thread, in either driving mode.
+  `echoir_session_read_peaks()`, `echoir_session_set_input_muted()`, `echoir_session_set_context()`
+  and `echoir_session_read_lag()` are thread-safe. They can run on any thread, in either driving mode.
 - `echoir_translator_translate()` is thread-safe: calls on one translator run one at a time. Its
   result is kept per calling thread (see Ownership above), so threads can translate on one translator and
   each reads its own result.
@@ -451,6 +451,32 @@ echoir_status echoir_session_clear(echoir_session* session);
 
 Drops the text of the segment in progress and emits an `ECHOIR_EVENT_CLEARED` event on the calling
 thread. Timestamps keep running. Use `echoir_session_reset()` to start the timeline again.
+
+### Context
+
+```c
+echoir_status echoir_session_set_context(echoir_session* session, const char* context);
+```
+
+Sets UTF-8 text that every decode of the session gets ahead of the session's own recent lines: the
+names, places and terms the audio is likely to hold, such as the cast of a film or the players of a
+game, so the decoder spells them right. NULL or `""` clears it, which is the default. The text is read
+during the call only.
+
+The limits depend on the backend:
+
+- Whisper: the context and the recent lines share one prompt of 223 tokens, about 160 English words.
+  Recent lines are left out first, so the context may take all of it.
+- Qwen3-ASR: up to 512 tokens of context, apart from the recent lines. It must not contain the
+  model's audio marker, `<__media__>`.
+
+A context over the limit, or one that is not UTF-8, returns `ECHOIR_ERR_INVALID_ARG` with the reason in
+`echoir_last_error()`, and the previous context stays. The call never waits for a decode, in either
+driving mode. A decode tick reads the context when it starts, so a tick that runs keeps the old one and
+the new one applies from the next tick.
+
+A decoder can write context terms that the audio does not hold, most often over silence, music or
+speech in another language. Keep the context to what is likely to be said.
 
 ### Audio store, level envelope and input mute
 

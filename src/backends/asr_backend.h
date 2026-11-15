@@ -47,6 +47,11 @@ public:
     virtual ~IAsrBackend() = default;
     virtual DecodeResult decode(const DecodeRequest& request) = 0;
     virtual std::string name() const = 0;  // "whisper" or "qwen3-asr"
+    // Throws std::invalid_argument when decode() would refuse this DecodeRequest::context, so a
+    // host learns before a decode that its context does not fit. It only reads the tokenizer, so
+    // it may run on any thread, also while a decode runs, without the engine's gate. decode()
+    // applies the same check.
+    virtual void check_context(std::string_view /*context*/) const {}
     // True when decode() takes a non-empty DecodeRequest::prefix.
     virtual bool supports_prefix() const { return false; }
     // The history that the stream session gives the segment that starts at a forced cut: the FINAL

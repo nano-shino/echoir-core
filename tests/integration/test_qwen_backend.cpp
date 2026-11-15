@@ -14,6 +14,7 @@
 #include <stdexcept>
 #include <string>
 #include <system_error>
+#include <thread>
 #include <vector>
 
 #include "audio/resampler.h"
@@ -203,6 +204,43 @@ TEST_CASE("QwenBackend rejects a context over 512 tokens") {
     CHECK_THROWS_AS(
         shared_cpu_backend().decode({std::span<const float>(silence), no_history, "auto", context}),
         std::invalid_argument);
+}
+
+TEST_CASE("QwenBackend checks a context while a decode runs on another thread") {
+    const auto model = et::model_file("qwen3-asr-0.6b-q8_0");
+    ECHOIR_REQUIRE_OR_SKIP(model, "qwen3-asr-0.6b-q8_0 model (models/Qwen3-ASR-0.6B-Q8_0.gguf)");
+    const auto mmproj = et::model_file("qwen3-asr-0.6b-q8_0", "mmproj");
+    ECHOIR_REQUIRE_OR_SKIP(mmproj, "qwen3-asr-0.6b-q8_0 mmproj");
+    const auto wav = et::fixture("jfk");
+    ECHOIR_REQUIRE_OR_SKIP(wav, "jfk.wav fixture");
+
+    const std::vector<float> pcm = load_16k_mono(*wav);
+    echoir::IAsrBackend& backend = shared_cpu_backend();
+    std::string too_long;
+    for (int i = 0; i < 1000; ++i) {
+        too_long += "Kennedy ";
+    }
+
+    // A host checks a new context while the session decodes, without waiting for the decode.
+    std::string text;
+    std::thread decoder([&] {
+        const std::vector<std::string> no_history;
+        text = backend.decode({std::span<const float>(pcm), no_history, "auto"}).text;
+    });
+    int refused = 0;
+    for (int i = 0; i < 50; ++i) {
+        CHECK_NOTHROW(backend.check_context("Vocabulary: Kennedy, Americans."));
+        try {
+            backend.check_context(too_long);
+        } catch (const std::invalid_argument&) {
+            ++refused;
+        }
+    }
+    decoder.join();
+    CHECK(refused == 50);
+    CHECK(contains_phrase(text, "ask not what your country"));
+    CHECK_THROWS_AS(backend.check_context("Names: <__media__>"), std::invalid_argument);
+    CHECK_NOTHROW(backend.check_context(""));
 }
 
 TEST_CASE("QwenBackend gives the same text for jfk.wav after another window") {

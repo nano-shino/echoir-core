@@ -233,6 +233,8 @@ Session::Session(IAsrBackend& backend, vad::IVad& vad, SessionConfig config, Ses
         throw std::invalid_argument(
             "the rollback policy needs a backend with decoder prefix support");
     }
+    check_context(config_.context);
+    context_ = config_.context;
     if (!sink_) {
         throw std::invalid_argument("the session needs an event sink");
     }
@@ -296,6 +298,23 @@ void Session::push(std::span<const float> interleaved, std::int32_t sample_rate,
         take_in(from);
     }
     wake_worker();
+}
+
+void Session::check_context(std::string_view context) const {
+    // Decoding replaces each invalid byte with U+FFFD, so the text survives a round trip only when
+    // it is valid UTF-8. The tokenizers would otherwise see bytes that no token covers.
+    if (utf32_to_utf8(utf8_to_utf32(context)) != context) {
+        throw std::invalid_argument("the context is not UTF-8");
+    }
+    // The backend's check only reads the tokenizer, so it runs outside the gate and never waits
+    // for a decode.
+    backend_.check_context(context);
+}
+
+void Session::set_context(std::string context) {
+    check_context(context);
+    std::lock_guard<std::mutex> lock(context_mu_);
+    context_ = std::move(context);
 }
 
 void Session::mark_seam() {
@@ -481,6 +500,13 @@ bool Session::run_tick(bool finish, bool drop_on_failure) {
     if (window.empty()) {
         return false;
     }
+    // One context for the whole tick, so a set_context() during the tick cannot give its decodes,
+    // or a decode and its retry without history, different prompts.
+    std::string context;
+    {
+        std::lock_guard<std::mutex> lock(context_mu_);
+        context = context_;
+    }
     // The timeline end of the window, which is decoded once this tick commits.
     const std::int64_t window_end = origin_samples_ + static_cast<std::int64_t>(window.size());
     // lag() reports the running tick. The mark is cleared however the tick ends.
@@ -517,7 +543,7 @@ bool Session::run_tick(bool finish, bool drop_on_failure) {
     const auto decode_started = std::chrono::steady_clock::now();
     try {
         while (true) {
-            cut = analyze(current, finish, origin, next, events, speech_samples, wait_ms);
+            cut = analyze(current, finish, origin, context, next, events, speech_samples, wait_ms);
             if (!finish || cut >= current.size()) {
                 break;
             }
@@ -573,8 +599,9 @@ bool Session::run_tick(bool finish, bool drop_on_failure) {
 }
 
 std::size_t Session::analyze(const std::vector<float>& window, bool finish, std::int64_t origin,
-                             State& st, std::vector<SessionEvent>& events,
-                             std::int64_t& speech_samples, double& wait_ms) {
+                             const std::string& context, State& st,
+                             std::vector<SessionEvent>& events, std::int64_t& speech_samples,
+                             double& wait_ms) {
     const auto len = static_cast<std::int64_t>(window.size());
     // Each call into the VAD or the decoder runs in a turn of the gate, which other sessions on
     // the same models share. The turn ends with the call, so sessions interleave call by call.
@@ -638,7 +665,7 @@ std::size_t Session::analyze(const std::vector<float>& window, bool finish, std:
         // continuation came from a decode that heard audio past the segment's end.
         DecodeRequest request{
             std::span<const float>(window.data() + start, static_cast<std::size_t>(end - start)),
-            at_seam ? seam_history : st.prompts, config_.language, config_.context};
+            at_seam ? seam_history : st.prompts, config_.language, context};
         if (rollback && ongoing && st.open_decodes >= config_.unfixed_decodes) {
             request.prefix = st.continuation;
             request.rollback_tokens = config_.rollback_tokens;

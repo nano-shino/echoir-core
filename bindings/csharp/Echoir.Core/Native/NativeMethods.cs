@@ -70,6 +70,9 @@ internal static unsafe partial class NativeMethods
     [LibraryImport(Library, EntryPoint = "echoir_session_set_input_muted")]
     internal static partial int SessionSetInputMuted(nint session, int muted);
 
+    [LibraryImport(Library, EntryPoint = "echoir_session_set_context")]
+    internal static partial int SessionSetContext(nint session, nint context);
+
     [LibraryImport(Library, EntryPoint = "echoir_session_read_lag")]
     internal static partial int SessionReadLag(nint session, LagData* output);
 
