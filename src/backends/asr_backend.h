@@ -35,6 +35,9 @@ struct DecodeResult {
     // used, minus its rollback, plus the new output. It can hold text that text leaves out, such as
     // a language header, so it is not cleaned. Equal to text for a backend without prefix support.
     std::string continuation;
+    // ISO code of the language the text is in, as the decoder detected it ("en", "zh", ...), or
+    // the forced DecodeRequest::language. Empty when the decoder named none, such as for silence.
+    std::string language;
 };
 
 // decode() is not reentrant. The sessions of an engine take turns through its gate

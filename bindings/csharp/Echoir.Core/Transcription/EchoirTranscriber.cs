@@ -894,11 +894,11 @@ public sealed class EchoirTranscriber : IDisposable, IAsyncDisposable
         {
             case NotificationKind.Partial:
                 _transcript.ApplyPartial(new Segment(
-                    notification.Id, notification.StartMs, notification.EndMs, notification.Text));
+                    notification.Id, notification.StartMs, notification.EndMs, notification.Text, notification.Language));
                 break;
             case NotificationKind.Final:
                 _transcript.ApplyFinal(new Segment(
-                    notification.Id, notification.StartMs, notification.EndMs, notification.Text));
+                    notification.Id, notification.StartMs, notification.EndMs, notification.Text, notification.Language));
                 break;
             case NotificationKind.Cleared:
                 _transcript.ApplyCleared();
@@ -939,9 +939,11 @@ public sealed class EchoirTranscriber : IDisposable, IAsyncDisposable
         switch (ev.Type)
         {
             case NativeValues.EventPartial:
-                return new Notification(NotificationKind.Partial, ev.SegmentId, ev.StartMs, ev.EndMs, Text(ev.Text));
+                return new Notification(
+                    NotificationKind.Partial, ev.SegmentId, ev.StartMs, ev.EndMs, Text(ev.Text), Language: Text(ev.Language));
             case NativeValues.EventFinal:
-                return new Notification(NotificationKind.Final, ev.SegmentId, ev.StartMs, ev.EndMs, Text(ev.Text));
+                return new Notification(
+                    NotificationKind.Final, ev.SegmentId, ev.StartMs, ev.EndMs, Text(ev.Text), Language: Text(ev.Language));
             case NativeValues.EventCleared:
                 return new Notification(NotificationKind.Cleared, 0, 0, 0, string.Empty);
             case NativeValues.EventError:
@@ -1248,7 +1250,8 @@ public sealed class EchoirTranscriber : IDisposable, IAsyncDisposable
         long EndMs,
         string Text,
         TranscriberStats? Stats = null,
-        CaptureState Capture = CaptureState.Off);
+        CaptureState Capture = CaptureState.Off,
+        string Language = "");
 
     // The poll thread. It is stopped by a flag, and joined by Dispose.
     private sealed class Poller

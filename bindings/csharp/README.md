@@ -60,6 +60,15 @@ follower.Follow(systemTranscriber.Transcript, "system");
   `Follow`, like the events of `EchoirTranscriber`. `Submit` queues a segment again, such as one
   that was decoded again.
 
+### Lines already in the target language
+
+Every `Segment` carries the `Language` the model detected for it (`"en"`, `"zh"`, ...; empty when it
+named none). With `SkipSameLanguage` on (the default), a FINAL segment whose `Language` is the target
+language is not sent to the translator: `Translated` is raised for it at once with its own text and
+`SameLanguage` set. A segment in progress in the target language is raised as `ProvisionalTranslated`
+with its own text and `SameLanguage` set, with any translator. Codes are compared exactly, ignoring
+case, so speech detected as `zh` is still translated into `zh-Hant`.
+
 ### Translating while a line is spoken
 
 With a translator whose catalogue entry has `"provisional": true` (`EchoirTranslator.Provisional`,

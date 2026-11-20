@@ -56,7 +56,10 @@ public:
         }
         const std::size_t blocks = std::max<std::size_t>(1, request.pcm.size() / kBlockSamples);
         const std::string text = "fake " + std::to_string(blocks);
-        return DecodeResult{text, text};
+        // The fake model "detects" English, or writes the forced language.
+        const std::string language =
+            request.language.empty() || request.language == "auto" ? "en" : request.language;
+        return DecodeResult{text, text, language};
     }
 
     std::string name() const override { return "fake"; }

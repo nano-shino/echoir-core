@@ -572,6 +572,8 @@ echoir_event to_abi(const echoir::SessionEvent& ev) {
     out.text = ev.text.c_str();
     const bool has_detail = ev.type == ECHOIR_EVENT_ERROR || ev.type == ECHOIR_EVENT_STATS;
     out.detail = has_detail ? ev.detail.c_str() : nullptr;
+    const bool has_text = ev.type == ECHOIR_EVENT_PARTIAL || ev.type == ECHOIR_EVENT_FINAL;
+    out.language = has_text ? ev.language.c_str() : nullptr;
     return out;
 }
 

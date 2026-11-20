@@ -77,6 +77,7 @@ internal struct EventData
     public long EndMs;
     public nint Text;
     public nint Detail;
+    public nint Language;
 }
 
 [StructLayout(LayoutKind.Sequential)]

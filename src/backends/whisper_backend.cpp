@@ -231,6 +231,15 @@ DecodeResult WhisperBackend::decode(const DecodeRequest& request) {
         result.text += whisper_full_get_segment_text(ctx_, i);
     }
     result.continuation = result.text;
+    // The language whisper detected for this window, or the forced one. English-only models have
+    // no language tokens and always decode English.
+    if (multilingual_) {
+        const int lang_id = whisper_full_lang_id(ctx_);
+        const char* code = lang_id >= 0 ? whisper_lang_str(lang_id) : nullptr;
+        result.language = code != nullptr ? code : "";
+    } else {
+        result.language = "en";
+    }
     return result;
 }
 

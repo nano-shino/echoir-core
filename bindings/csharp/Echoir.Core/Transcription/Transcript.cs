@@ -3,8 +3,10 @@ using System.ComponentModel;
 
 namespace Echoir.Core;
 
-// One segment of text. A PARTIAL and the FINAL that replaces it share Id.
-public sealed record Segment(long Id, long StartMs, long EndMs, string Text);
+// One segment of text. A PARTIAL and the FINAL that replaces it share Id. Language is the ISO code
+// of the language the model detected for the text ("en", "zh", "yue", ...), or the language the
+// session was started with when it is not "auto"; empty when the model named none.
+public sealed record Segment(long Id, long StartMs, long EndMs, string Text, string Language = "");
 
 // The text of a session: the finished segments, and the segment in progress. Changes are raised
 // on the context the transcriber captured at Start.

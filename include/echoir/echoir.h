@@ -149,6 +149,10 @@ typedef struct {
   const char* text;                    // UTF-8. Valid only during the callback, or until the next
                                        // poll or free in queue mode.
   const char* detail;                  // ERROR message, or STATS JSON object; NULL otherwise
+  // PARTIAL and FINAL: ISO code of the language the model detected for the text ("en", "zh",
+  // "yue", ...), or the session's language when one is set. "" when the model named none (such as
+  // an empty FINAL); NULL for the other kinds. Valid as long as text is.
+  const char* language;
 } echoir_event;
 
 // Event callback, given to echoir_session_create(). It runs on the thread that drives the

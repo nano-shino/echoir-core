@@ -6,12 +6,14 @@ namespace Echoir.Core;
 // Raised when the translation of a FINAL segment is ready. Track and Segment.Id key the line.
 public sealed class TranslatedEventArgs : EventArgs
 {
-    public TranslatedEventArgs(Transcript transcript, string track, Segment segment, Translation translation)
+    public TranslatedEventArgs(
+        Transcript transcript, string track, Segment segment, Translation translation, bool sameLanguage = false)
     {
         Transcript = transcript;
         Track = track;
         Segment = segment;
         Translation = translation;
+        SameLanguage = sameLanguage;
     }
 
     // The transcript the segment belongs to, and the name it was followed under.
@@ -27,6 +29,10 @@ public sealed class TranslatedEventArgs : EventArgs
 
     // True when the model stopped at its generation limit, so Text may end mid-sentence.
     public bool Capped => Translation.Capped;
+
+    // True when the segment was already in the target language (see
+    // TranscriptTranslator.SkipSameLanguage): Text is the segment's own text, and no translator ran.
+    public bool SameLanguage { get; }
 }
 
 // Raised when a segment will not be translated: it waited behind too many others, or its
@@ -63,13 +69,15 @@ public sealed class TranslationSkippedEventArgs : EventArgs
 public sealed class ProvisionalTranslatedEventArgs : EventArgs
 {
     public ProvisionalTranslatedEventArgs(
-        Transcript transcript, string track, long segmentId, string stableText, string tailText)
+        Transcript transcript, string track, long segmentId, string stableText, string tailText,
+        bool sameLanguage = false)
     {
         Transcript = transcript;
         Track = track;
         SegmentId = segmentId;
         StableText = stableText;
         TailText = tailText;
+        SameLanguage = sameLanguage;
     }
 
     public Transcript Transcript { get; }
@@ -80,6 +88,9 @@ public sealed class ProvisionalTranslatedEventArgs : EventArgs
 
     public string StableText { get; }
     public string TailText { get; }
+
+    // True when the PARTIAL is already in the target language: StableText is its own text.
+    public bool SameLanguage { get; }
 }
 
 // Follows the FINAL segments of one or more transcripts and translates them through one translator.
@@ -106,6 +117,14 @@ public sealed class ProvisionalTranslatedEventArgs : EventArgs
 // FINAL segments only; sentence and tail work that has gone stale is discarded. Context for a
 // sentence or a tail: the two sentences before it in its transcript. With a translator that is
 // not Provisional, or more transcripts followed, PARTIALs are never translated.
+//
+// Same language. A segment whose Language (as the model detected it) is the target language is not
+// sent to the translator while SkipSameLanguage is on (the default): Translated is raised for it at
+// once with its own text and SameLanguage set, and a PARTIAL in the target language is raised as
+// ProvisionalTranslated with its own text as StableText, so a host that shows translations only
+// still shows that speech. Languages are compared as ISO codes, ignoring case: "zh" is not
+// "zh-Hant", so speech in Chinese is still translated into Traditional Chinese. A segment with no
+// Language is translated.
 //
 // A clear of a followed transcript, Reset, and a restart of its segment ids (a new session on the
 // same transcript) drop what waits for it, and the result of a translation that was already running
@@ -157,6 +176,7 @@ public sealed class TranscriptTranslator : IDisposable
     private readonly CancellationTokenSource _stop = new();
     private Task? _worker;
     private bool _disposed;
+    private bool _skipSameLanguage = true;
 
     public TranscriptTranslator(ITextTranslator translator, string targetLanguage, string? sourceLanguage = null)
     {
@@ -169,6 +189,20 @@ public sealed class TranscriptTranslator : IDisposable
 
     // The language the segments are translated into.
     public string TargetLanguage => _target;
+
+    // Segments already in TargetLanguage pass through untranslated (see the class remarks). On by
+    // default.
+    public bool SkipSameLanguage
+    {
+        get => Volatile.Read(ref _skipSameLanguage);
+        set => Volatile.Write(ref _skipSameLanguage, value);
+    }
+
+    // True when language, a segment's detected language, is target. Exact ISO codes, ignoring case.
+    public static bool IsSameLanguage(string? language, string target)
+        => !string.IsNullOrEmpty(language) && string.Equals(language, target, StringComparison.OrdinalIgnoreCase);
+
+    private bool PassesThrough(Segment segment) => SkipSameLanguage && IsSameLanguage(segment.Language, _target);
 
     // Raised when a translation is ready.
     public event EventHandler<TranslatedEventArgs>? Translated;
@@ -402,6 +436,22 @@ public sealed class TranscriptTranslator : IDisposable
     {
         if (string.IsNullOrWhiteSpace(segment.Text))
         {
+            return;
+        }
+        if (PassesThrough(segment))
+        {
+            int generation;
+            lock (_gate)
+            {
+                if (_disposed || !_follows.Contains(follow))
+                {
+                    return;
+                }
+                generation = follow.Generation;
+            }
+            var same = new Translation(segment.Text, false, 0, 0, 0, TimeSpan.Zero, TimeSpan.Zero);
+            Raise(follow, generation, () =>
+                Translated?.Invoke(this, new TranslatedEventArgs(follow.Transcript, follow.Track, segment, same, sameLanguage: true)));
             return;
         }
         string? context = null;
@@ -682,6 +732,11 @@ public sealed class TranscriptTranslator : IDisposable
     private void OnPartialChanged(Tracked follow)
     {
         Segment? partial = follow.Transcript.Partial;
+        if (partial is not null && !string.IsNullOrWhiteSpace(partial.Text) && PassesThrough(partial))
+        {
+            PassThroughPartial(follow, partial);
+            return;
+        }
         ProvisionalTranslatedEventArgs? update = null;
         lock (_gate)
         {
@@ -723,6 +778,35 @@ public sealed class TranscriptTranslator : IDisposable
         catch (ObjectDisposedException)
         {
             // Disposed meanwhile.
+        }
+        RaiseProvisional(follow, update);
+    }
+
+    // A PARTIAL already in the target language is shown as it is: nothing of it is translated, and
+    // its own text is the provisional translation.
+    private void PassThroughPartial(Tracked follow, Segment partial)
+    {
+        ProvisionalTranslatedEventArgs? update = null;
+        lock (_gate)
+        {
+            if (_disposed || !_follows.Contains(follow))
+            {
+                return;
+            }
+            if (partial.Id < follow.PartialId)
+            {
+                follow.ResetProvisional();
+            }
+            RemoveWork(_sentences, follow);
+            follow.Queued.Clear();
+            follow.SetPartial(partial.Id, new List<string>());
+            if (follow.ShownStable != partial.Text || follow.ShownTail is { Length: > 0 })
+            {
+                follow.ShownStable = partial.Text;
+                follow.ShownTail = string.Empty;
+                update = new ProvisionalTranslatedEventArgs(
+                    follow.Transcript, follow.Track, partial.Id, partial.Text, string.Empty, sameLanguage: true);
+            }
         }
         RaiseProvisional(follow, update);
     }

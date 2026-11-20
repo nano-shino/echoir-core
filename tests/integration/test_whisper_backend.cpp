@@ -226,6 +226,8 @@ TEST_CASE("WhisperBackend decodes jfk.wav with whisper-tiny-en") {
             INFO("language " << label << ", " << history->size()
                              << " history entries: " << result.text);
             CHECK(lower(result.text).find("ask not what your country") != std::string::npos);
+            // An English-only model always reports English.
+            CHECK(result.language == "en");
         }
     }
 }
