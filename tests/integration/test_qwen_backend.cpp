@@ -289,7 +289,8 @@ TEST_CASE("QwenBackend with a forced language returns text without a language he
     CHECK(contains_phrase(text, "ask not what your country"));
     CHECK(text.find("<asr_text>") == std::string::npos);
     CHECK(lower(text).find("language") == std::string::npos);
-    CHECK(shared_cpu_backend().decode({std::span<const float>(pcm), no_history, "en"}).language == "en");
+    CHECK(shared_cpu_backend().decode({std::span<const float>(pcm), no_history, "en"}).language ==
+          "en");
 
     // Forcing French changes the output, so the prefill is really in effect. The English phrase
     // would appear anyway if the language were ignored.

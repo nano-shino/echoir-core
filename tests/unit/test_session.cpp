@@ -79,7 +79,8 @@ public:
             before_return(start, end);
         }
         const std::string text = text_for ? text_for(start, end) : span_text(start, end);
-        return echoir::DecodeResult{text, text, language};  // no prefix support: continuation = text
+        return echoir::DecodeResult{text, text,
+                                    language};  // no prefix support: continuation = text
     }
 
     std::string name() const override { return "fake"; }

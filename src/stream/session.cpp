@@ -746,8 +746,8 @@ std::size_t Session::analyze(const std::vector<float>& window, bool finish, std:
         std::string text = utf32_to_utf8(clean);
         if (!text.empty() || st.open_shown) {
             const std::int64_t id = st.open_id != 0 ? st.open_id : st.next_id++;
-            events.push_back(make_event(ECHOIR_EVENT_FINAL, id, abs_start, abs_end,
-                                        std::move(text), decoded.language));
+            events.push_back(make_event(ECHOIR_EVENT_FINAL, id, abs_start, abs_end, std::move(text),
+                                        decoded.language));
         }
         st.close_open();
         last_final_end = std::max(last_final_end, end);
