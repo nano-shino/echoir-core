@@ -95,6 +95,9 @@ std::string event_json(const echoir::SessionEvent& event) {
                     {"start_ms", event.start_ms},
                     {"end_ms", event.end_ms},
                     {"text", event.text}};
+            if (!event.language.empty()) {
+                line["language"] = event.language;
+            }
             break;
         case ECHOIR_EVENT_FINAL:
             line = {{"type", "final"},
@@ -102,6 +105,9 @@ std::string event_json(const echoir::SessionEvent& event) {
                     {"start_ms", event.start_ms},
                     {"end_ms", event.end_ms},
                     {"text", event.text}};
+            if (!event.language.empty()) {
+                line["language"] = event.language;
+            }
             break;
         case ECHOIR_EVENT_CLEARED:
             line = {{"type", "cleared"}};

@@ -150,15 +150,21 @@ Each event is one line. It has a `type`, and the other fields depend on the type
 **`partial`** is the text of the segment in progress, and it changes as more audio arrives:
 
 ```json
-{"type":"partial","id":7,"start_ms":12340,"end_ms":15020,"text":"what is your"}
+{"type":"partial","id":7,"start_ms":12340,"end_ms":15020,"text":"what is your","language":"en"}
 ```
 
 **`final`** is the text of a segment that is complete. It replaces the `partial` with the same `id`.
 An empty `text` means the segment has no speech: remove its `partial` and show nothing:
 
 ```json
-{"type":"final","id":7,"start_ms":12340,"end_ms":15900,"text":"What is your name?"}
+{"type":"final","id":7,"start_ms":12340,"end_ms":15900,"text":"What is your name?","language":"en"}
 ```
+
+`language` on a `partial` or `final` is the ISO code of the language the model detected for the text
+(`en`, `zh`, `yue`, ...), or the session's `language` when `start` set one. Whisper detects it for
+each window, Qwen3-ASR names it before each transcript. It is absent when the model named none, such
+as for an empty `final`. A host can use it to show the language, or to skip translating a line that
+is already in the target language.
 
 **`cleared`** is sent by `clear`. Drop the text on screen, including the current `partial`:
 

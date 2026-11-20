@@ -76,7 +76,7 @@ the JSON text that the library returns.
   reference.
 - Path strings in the params structs are read during the create call only. The host can release them
   afterwards.
-- Event `text` and `detail` pointers are valid only during the callback. In queue mode they stay valid
+- Event `text`, `detail` and `language` pointers are valid only during the callback. In queue mode they stay valid
   until the next `echoir_session_poll()` or until the session is freed.
 - The `echoir_translation` that `echoir_translator_translate()` returns belongs to the library, one per
   calling thread, like the strings of the `*_json` calls. It and its text stay valid until the next
@@ -883,6 +883,7 @@ typedef struct {
   int64_t     start_ms, end_ms;
   const char* text;         /* UTF-8, valid as described under Ownership */
   const char* detail;       /* ERROR message or STATS JSON; NULL otherwise */
+  const char* language;     /* PARTIAL and FINAL: detected ISO code, "" for none; NULL otherwise */
 } echoir_event;
 ```
 
@@ -914,6 +915,13 @@ it is not part of `decode_ms`, `decode_max_ms`, `rtf`, `load` or `speech_rtf`, w
 model's speed. `backend` names the backend.
 
 `detail` is NULL for every event type except ERROR and STATS.
+
+`language` is set on PARTIAL and FINAL events: the ISO code of the language the model detected for
+the text (`en`, `zh`, `yue`, ...), or the session's `language` when it is not `"auto"`. Whisper
+detects it per decoded window; Qwen3-ASR names it in the header it writes before each transcript.
+It is `""` when the model named none, such as for an empty FINAL, and NULL for the other event
+types. The field was added at the end of the struct; the library fills it, so a host built
+against an older header reads the fields it knows.
 
 ## Related documents
 

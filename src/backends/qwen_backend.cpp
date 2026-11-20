@@ -87,6 +87,32 @@ const char* forced_language_name(const std::string& language) {
     throw std::invalid_argument("unsupported language: " + language);
 }
 
+// The ISO code of the language a decoder output names in its header ("language English<asr_text>"
+// gives "en"). Empty when there is no header, or it names no language the table has (the model
+// writes "language None" for audio without speech).
+std::string header_language(std::string_view output) {
+    const std::size_t tag_at = output.find(kTranscriptTag);
+    if (tag_at == std::string_view::npos) {
+        return {};
+    }
+    std::string_view header = output.substr(0, tag_at);
+    constexpr std::string_view kWord = "language ";
+    const std::size_t word_at = header.rfind(kWord);
+    if (word_at == std::string_view::npos) {
+        return {};
+    }
+    header.remove_prefix(word_at + kWord.size());
+    while (!header.empty() && (header.back() == ' ' || header.back() == '\n')) {
+        header.remove_suffix(1);
+    }
+    for (const LanguageName& entry : kLanguages) {
+        if (header == entry.name) {
+            return entry.code;
+        }
+    }
+    return {};
+}
+
 // Generation cap for a window: kCapBase plus kCapPerSecond per started second of audio.
 int generation_cap(std::size_t n_samples) {
     const auto seconds = static_cast<int>((n_samples + kSampleRate - 1) / kSampleRate);
@@ -377,6 +403,8 @@ DecodeResult QwenBackend::decode(const DecodeRequest& request) {
     DecodeResult result;
     result.continuation = prefix + raw;
     result.text = result.continuation;
+    // A forced language is in the prefill, not the output.
+    result.language = forced_language != nullptr ? request.language : header_language(result.text);
 
     // Without a forced language the output starts with "language <Name><asr_text>". With one, the
     // prefill already holds the header, so the tag may be missing, and the text is kept as is.

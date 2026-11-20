@@ -65,6 +65,8 @@ public:
     bool cut_history = false;  // history_at_cut()
     // check_context() refuses a context longer than this many bytes.
     std::size_t max_context = std::numeric_limits<std::size_t>::max();
+    // The language every decode reports.
+    std::string language;
 
     echoir::DecodeResult decode(const echoir::DecodeRequest& request) override {
         if (request.pcm.empty()) {
@@ -77,7 +79,8 @@ public:
             before_return(start, end);
         }
         const std::string text = text_for ? text_for(start, end) : span_text(start, end);
-        return echoir::DecodeResult{text, text};  // no prefix support, so continuation is the text
+        return echoir::DecodeResult{text, text,
+                                    language};  // no prefix support: continuation = text
     }
 
     std::string name() const override { return "fake"; }
@@ -226,6 +229,25 @@ TEST_CASE("session: no sample range is decoded twice as FINAL, and FINALs are mo
     }
     // The open segment is shown as PARTIAL while it grows, under one id.
     CHECK(count_type(rig.events, ECHOIR_EVENT_PARTIAL) > 0);
+}
+
+TEST_CASE("session: PARTIAL and FINAL carry the language the decoder reported") {
+    Rig rig;
+    rig.backend.language = "fr";
+    rig.vad.speech = {{8000, 40000}};  // 0.5-2.5 s
+    for (int i = 0; i < 8; ++i) {
+        rig.push_ms(500);
+        rig.session().process();
+    }
+    rig.session().flush();
+
+    REQUIRE(count_type(rig.events, ECHOIR_EVENT_PARTIAL) > 0);
+    REQUIRE(count_type(rig.events, ECHOIR_EVENT_FINAL) == 1);
+    for (const SessionEvent& ev : rig.events) {
+        if (ev.type == ECHOIR_EVENT_PARTIAL || ev.type == ECHOIR_EVENT_FINAL) {
+            CHECK(ev.language == "fr");
+        }
+    }
 }
 
 TEST_CASE("session: a forced cut ends a long segment at 20 s, anchored at its start") {

@@ -138,13 +138,14 @@ constexpr std::int64_t kSeamMs = 500;
 constexpr std::int64_t kMinMaxSegmentMs = 200;
 
 SessionEvent make_event(echoir_event_type type, std::int64_t id, std::int64_t start_ms,
-                        std::int64_t end_ms, std::string text) {
+                        std::int64_t end_ms, std::string text, std::string language = {}) {
     SessionEvent ev;
     ev.type = type;
     ev.segment_id = id;
     ev.start_ms = start_ms;
     ev.end_ms = end_ms;
     ev.text = std::move(text);
+    ev.language = std::move(language);
     return ev;
 }
 
@@ -184,12 +185,14 @@ std::optional<SessionEvent> Session::State::closing_event() const {
     if (text.empty() && !open_shown) {
         return std::nullopt;
     }
-    return make_event(ECHOIR_EVENT_FINAL, open_id, open_start_ms, open_end_ms, std::move(text));
+    return make_event(ECHOIR_EVENT_FINAL, open_id, open_start_ms, open_end_ms, std::move(text),
+                      open_language);
 }
 
 void Session::State::close_open() {
     open_text.reset();
     open_latest.clear();
+    open_language.clear();
     open_id = 0;
     open_shown = false;
     drop_continuation();
@@ -703,6 +706,7 @@ std::size_t Session::analyze(const std::vector<float>& window, bool finish, std:
                 shown = st.open_text.stabilize(clean);
             }
             st.open_latest = clean;
+            st.open_language = decoded.language;
             if (st.open_id == 0) {
                 st.open_id = st.next_id++;
             }
@@ -723,7 +727,7 @@ std::size_t Session::analyze(const std::vector<float>& window, bool finish, std:
             // A finishing tick sends the segment as FINAL below, so there is no PARTIAL to show.
             if (config_.emit_partials && !finish) {
                 events.push_back(make_event(ECHOIR_EVENT_PARTIAL, st.open_id, abs_start, abs_end,
-                                            utf32_to_utf8(shown)));
+                                            utf32_to_utf8(shown), decoded.language));
                 st.open_shown = true;
             }
             continue;
@@ -742,8 +746,8 @@ std::size_t Session::analyze(const std::vector<float>& window, bool finish, std:
         std::string text = utf32_to_utf8(clean);
         if (!text.empty() || st.open_shown) {
             const std::int64_t id = st.open_id != 0 ? st.open_id : st.next_id++;
-            events.push_back(
-                make_event(ECHOIR_EVENT_FINAL, id, abs_start, abs_end, std::move(text)));
+            events.push_back(make_event(ECHOIR_EVENT_FINAL, id, abs_start, abs_end, std::move(text),
+                                        decoded.language));
         }
         st.close_open();
         last_final_end = std::max(last_final_end, end);

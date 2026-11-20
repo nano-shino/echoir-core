@@ -110,6 +110,9 @@ struct SessionEvent {
     std::int64_t end_ms = 0;
     std::string text;    // PARTIAL and FINAL, UTF-8; empty for other kinds
     std::string detail;  // ERROR: the message. STATS: the JSON object
+    // PARTIAL and FINAL: ISO code of the language the decoder detected for the text (or the forced
+    // language). Empty when it named none, and for other kinds.
+    std::string language;
 };
 
 // How far the decoding is behind the audio taken in, on the session timeline. backlog_ms is
@@ -232,6 +235,7 @@ private:
         std::vector<std::string> prompts;  // last finals, UTF-8, passed to the decoder as history
         text::Stabilizer open_text;        // agreement: decodes of the ongoing segment, for display
         std::u32string open_latest;        // newest cleaned decode of the ongoing segment
+        std::string open_language;         // language of that decode (DecodeResult::language)
         std::int64_t open_id = 0;          // 0 when no segment is ongoing
         bool open_shown = false;           // a PARTIAL has been queued for open_id
         std::int64_t open_start_ms = 0;

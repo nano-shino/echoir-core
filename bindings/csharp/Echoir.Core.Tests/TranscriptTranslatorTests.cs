@@ -72,6 +72,77 @@ public sealed class TranscriptTranslatorTests
     }
 
     [TestMethod]
+    public void AFinalAlreadyInTheTargetLanguagePassesThroughUntranslated()
+    {
+        var script = new ScriptedTranslator();
+        using var translator = new TranscriptTranslator(script, "en");
+        var seen = Collect(translator);
+        var transcript = new Transcript();
+        translator.Follow(transcript, "mic");
+
+        AddFinal(transcript, new Segment(1, 0, 900, "Hello there.", "EN"));
+        AddFinal(transcript, new Segment(2, 1000, 1900, "Bonjour.", "fr"));
+        AddFinal(transcript, new Segment(3, 2000, 2900, "No language.", ""));
+        Wait.Until(() => seen.Count == 3, "three results");
+
+        TranslatedEventArgs same = seen.Single(r => r.SegmentId == 1);
+        Assert.IsTrue(same.SameLanguage);
+        Assert.AreEqual("Hello there.", same.Text);
+        Assert.IsFalse(seen.Single(r => r.SegmentId == 2).SameLanguage);
+        Assert.AreEqual("en:Bonjour.", seen.Single(r => r.SegmentId == 2).Text);
+        Assert.AreEqual("en:No language.", seen.Single(r => r.SegmentId == 3).Text);
+        CollectionAssert.AreEquivalent(new[] { "Bonjour.", "No language." }, script.Calls.Select(c => c.Text).ToArray());
+        // The passed-through line is still context for the next one.
+        Assert.AreEqual("Hello there.", script.Calls.Single(c => c.Text == "Bonjour.").Context);
+    }
+
+    [TestMethod]
+    public void SameLanguageIsTranslatedWhenSkipSameLanguageIsOff()
+    {
+        var script = new ScriptedTranslator();
+        using var translator = new TranscriptTranslator(script, "en") { SkipSameLanguage = false };
+        var seen = Collect(translator);
+        var transcript = new Transcript();
+        translator.Follow(transcript, "mic");
+
+        AddFinal(transcript, new Segment(1, 0, 900, "Hello.", "en"));
+        Wait.Until(() => seen.Count == 1, "one translation");
+
+        Assert.AreEqual("en:Hello.", seen.Single().Text);
+        Assert.IsFalse(seen.Single().SameLanguage);
+    }
+
+    [TestMethod]
+    public void ScriptVariantsAreDifferentLanguages()
+    {
+        Assert.IsTrue(TranscriptTranslator.IsSameLanguage("zh", "ZH"));
+        Assert.IsFalse(TranscriptTranslator.IsSameLanguage("zh", "zh-Hant"));
+        Assert.IsFalse(TranscriptTranslator.IsSameLanguage("", "en"));
+        Assert.IsFalse(TranscriptTranslator.IsSameLanguage(null, "en"));
+    }
+
+    [TestMethod]
+    public void APartialAlreadyInTheTargetLanguageIsItsOwnProvisionalTranslation()
+    {
+        var script = new ScriptedTranslator();
+        using var translator = new TranscriptTranslator(script, "en");
+        var drafts = new ConcurrentQueue<ProvisionalTranslatedEventArgs>();
+        translator.ProvisionalTranslated += (_, e) => drafts.Enqueue(e);
+        var transcript = new Transcript();
+        translator.Follow(transcript, "mic");
+
+        transcript.ApplyPartial(new Segment(1, 0, 500, "Hello", "en"));
+        transcript.ApplyPartial(new Segment(1, 0, 900, "Hello there", "en"));
+        transcript.ApplyPartial(new Segment(1, 0, 900, "Hello there", "en"));
+
+        Assert.AreEqual(2, drafts.Count);
+        Assert.AreEqual("Hello there", drafts.Last().StableText);
+        Assert.AreEqual(string.Empty, drafts.Last().TailText);
+        Assert.IsTrue(drafts.All(d => d.SameLanguage));
+        Assert.AreEqual(0, script.Calls.Count);
+    }
+
+    [TestMethod]
     public void TranslatesEachFinalWithTheTwoEarlierOnesAsContext()
     {
         var script = new ScriptedTranslator();
